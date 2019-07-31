@@ -97,97 +97,6 @@ function install_dependencies() {
   fi
 }
 
-function setup_folly() {
-  FOLLY_DIR=$DEPS_DIR/folly
-  FOLLY_BUILD_DIR=$DEPS_DIR/folly/build/
-
-  if [ ! -d "$FOLLY_DIR" ] ; then
-    echo -e "${COLOR_GREEN}[ INFO ] Cloning folly repo ${COLOR_OFF}"
-    git clone https://github.com/facebook/folly.git "$FOLLY_DIR"
-  fi
-  cd $FOLLY_DIR
-  git fetch
-  FOLLY_REV=$(sed 's/Subproject commit //' "$START_DIR"/../build/deps/github_hashes/facebook/folly-rev.txt)
-  git checkout "$FOLLY_REV"
-  if [ "$PLATFORM" = "Mac" ]; then
-    # Homebrew installs OpenSSL in a non-default location on MacOS >= Mojave
-    # 10.14 because MacOS has its own SSL implementation.  If we find the
-    # typical Homebrew OpenSSL dir, load OPENSSL_ROOT_DIR so that cmake
-    # will find the Homebrew version.
-    dir=/usr/local/opt/openssl
-    if [ -d $dir ]; then
-        export OPENSSL_ROOT_DIR=$dir
-    fi
-  fi
-  echo -e "${COLOR_GREEN}Building Folly ${COLOR_OFF}"
-  mkdir -p "$FOLLY_BUILD_DIR"
-  cd "$FOLLY_BUILD_DIR" || exit
-  MAYBE_DISABLE_JEMALLOC=""
-  if [ "$NO_JEMALLOC" == true ] ; then
-    MAYBE_DISABLE_JEMALLOC="-DFOLLY_USE_JEMALLOC=0"
-  fi
-
-  cmake                                           \
-    -DCMAKE_PREFIX_PATH="$DEPS_DIR"               \
-    -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"            \
-    -DCMAKE_BUILD_TYPE=RelWithDebInfo             \
-    $MAYBE_DISABLE_JEMALLOC                       \
-    ..
-  make -j "$JOBS"
-  make install
-  echo -e "${COLOR_GREEN}Folly is installed ${COLOR_OFF}"
-  cd "$BWD" || exit
-}
-
-function setup_fizz() {
-  FIZZ_DIR=$DEPS_DIR/fizz
-  FIZZ_BUILD_DIR=$DEPS_DIR/fizz/build/
-  if [ ! -d "$FIZZ_DIR" ] ; then
-    echo -e "${COLOR_GREEN}[ INFO ] Cloning fizz repo ${COLOR_OFF}"
-    git clone https://github.com/facebookincubator/fizz "$FIZZ_DIR"
-  fi
-  cd "$FIZZ_DIR"
-  git fetch
-  FIZZ_REV=$(sed 's/Subproject commit //' "$START_DIR"/../build/deps/github_hashes/facebookincubator/fizz-rev.txt)
-  git checkout "$FIZZ_REV"
-  echo -e "${COLOR_GREEN}Building Fizz ${COLOR_OFF}"
-  mkdir -p "$FIZZ_BUILD_DIR"
-  cd "$FIZZ_BUILD_DIR" || exit
-  cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo       \
-    -DCMAKE_PREFIX_PATH="$DEPS_DIR"             \
-    -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"          \
-    -DBUILD_TESTS=ON                            \
-    "$FIZZ_DIR/fizz"
-  make -j "$JOBS"
-  make install
-  echo -e "${COLOR_GREEN}Fizz is installed ${COLOR_OFF}"
-  cd "$BWD" || exit
-}
-
-function setup_wangle() {
-  WANGLE_DIR=$DEPS_DIR/wangle
-  WANGLE_BUILD_DIR=$DEPS_DIR/wangle/build/
-  if [ ! -d "$WANGLE_DIR" ] ; then
-    echo -e "${COLOR_GREEN}[ INFO ] Cloning wangle repo ${COLOR_OFF}"
-    git clone https://github.com/facebook/wangle "$WANGLE_DIR"
-  fi
-  cd "$WANGLE_DIR"
-  git fetch
-  WANGLE_REV=$(sed 's/Subproject commit //' "$START_DIR"/../build/deps/github_hashes/facebook/wangle-rev.txt)
-  git checkout "$WANGLE_REV"
-  echo -e "${COLOR_GREEN}Building Wangle ${COLOR_OFF}"
-  mkdir -p "$WANGLE_BUILD_DIR"
-  cd "$WANGLE_BUILD_DIR" || exit
-  cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo       \
-    -DCMAKE_PREFIX_PATH="$DEPS_DIR"             \
-    -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"          \
-    "$WANGLE_DIR/wangle"
-  make -j "$JOBS"
-  make install
-  echo -e "${COLOR_GREEN}Wangle is installed ${COLOR_OFF}"
-  cd "$BWD" || exit
-}
-
 function setup_mvfst() {
   MVFST_DIR=$DEPS_DIR/mvfst
   MVFST_BUILD_DIR=$DEPS_DIR/mvfst/build/
@@ -251,9 +160,6 @@ mkdir -p "$DEPS_DIR"
 # Must execute from the directory containing this script
 cd "$(dirname "$0")"
 
-setup_folly
-setup_fizz
-setup_wangle
 MAYBE_BUILD_QUIC=""
 if [ "$WITH_QUIC" == true ] ; then
   setup_mvfst
@@ -267,7 +173,7 @@ cmake                                     \
   -DCMAKE_PREFIX_PATH="$DEPS_DIR"         \
   -DCMAKE_INSTALL_PREFIX="$BWD"           \
   $MAYBE_BUILD_QUIC                       \
-  -DBUILD_TESTS=On                        \
+  -DBUILD_TESTS=Off                       \
   ../..
 
 make -j "$JOBS"
