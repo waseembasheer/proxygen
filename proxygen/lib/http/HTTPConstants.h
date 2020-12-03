@@ -1,17 +1,16 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 namespace proxygen {
 
-//enum class ConnectionCloseReason : unsigned int {
+// enum class ConnectionCloseReason : unsigned int {
 //  SHUTDOWN,               // shutdown...probably due to the short shutdown
 //                          //  time we won't be able to see any of this
 //  READ_EOF,               // received FIN from client so the connection is
@@ -30,7 +29,7 @@ namespace proxygen {
 //                          //  reason is not accounted for
 //  kMAX_REASON
 //};
-
+// clang-format off
 #define CONNECTION_CLOSE_REASON_GEN(x) \
   x(SHUTDOWN, "shutdown") \
   x(READ_EOF, "read_eof") \
@@ -46,6 +45,7 @@ namespace proxygen {
   x(UNKNOWN, "unknown") \
   x(FLOW_CONTROL, "flow_control") \
   x(kMAX_REASON, "unset")
+// clang-format on
 
 #define CONNECTION_CLOSE_REASON_ENUM(e, r) e,
 enum class ConnectionCloseReason {
@@ -59,9 +59,9 @@ extern const char* getConnectionCloseReasonString(ConnectionCloseReason r);
 /**
  * Protocol to which the HTTPTransaction was upgraded
  */
-enum class UpgradeProtocol: int {
+enum class UpgradeProtocol : int {
   // We only support changing to TCP after CONNECT requests
   TCP
 };
 
-}
+} // namespace proxygen

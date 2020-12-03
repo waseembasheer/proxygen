@@ -1,23 +1,21 @@
 /*
- *  Copyright (c) 2018-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/DefaultHTTPCodecFactory.h>
 
-#include <proxygen/lib/http/codec/HTTP2Constants.h>
 #include <proxygen/lib/http/codec/HTTP1xCodec.h>
-#include <proxygen/lib/http/codec/SPDYCodec.h>
 #include <proxygen/lib/http/codec/HTTP2Codec.h>
+#include <proxygen/lib/http/codec/HTTP2Constants.h>
+#include <proxygen/lib/http/codec/SPDYCodec.h>
 
 namespace proxygen {
 
-DefaultHTTPCodecFactory::DefaultHTTPCodecFactory(
-    bool forceHTTP1xCodecTo1_1)
+DefaultHTTPCodecFactory::DefaultHTTPCodecFactory(bool forceHTTP1xCodecTo1_1)
     : forceHTTP1xCodecTo1_1_(forceHTTP1xCodecTo1_1) {
 }
 
@@ -26,25 +24,23 @@ std::unique_ptr<HTTPCodec> DefaultHTTPCodecFactory::getCodec(
     TransportDirection direction,
     bool /* isTLS */) {
 
-    auto spdyVersion = SPDYCodec::getVersion(chosenProto);
-    if (spdyVersion) {
-      return std::make_unique<SPDYCodec>(direction,
-                                           *spdyVersion);
-    } else if (chosenProto == proxygen::http2::kProtocolString ||
-               chosenProto == proxygen::http2::kProtocolCleartextString ||
-               chosenProto == proxygen::http2::kProtocolDraftString ||
-               chosenProto == proxygen::http2::kProtocolExperimentalString) {
-      return std::make_unique<HTTP2Codec>(direction);
-    } else {
-      if (!chosenProto.empty() &&
-          !HTTP1xCodec::supportsNextProtocol(chosenProto)) {
-        LOG(ERROR) << "Chosen upstream protocol " <<
-          "\"" << chosenProto << "\" is unimplemented. " <<
-          "Attempting to use HTTP/1.1";
-      }
-
-      return std::make_unique<HTTP1xCodec>(direction,
-                                             forceHTTP1xCodecTo1_1_);
+  auto spdyVersion = SPDYCodec::getVersion(chosenProto);
+  if (spdyVersion) {
+    return std::make_unique<SPDYCodec>(direction, *spdyVersion);
+  } else if (chosenProto == proxygen::http2::kProtocolString ||
+             chosenProto == proxygen::http2::kProtocolCleartextString ||
+             chosenProto == proxygen::http2::kProtocolDraftString ||
+             chosenProto == proxygen::http2::kProtocolExperimentalString) {
+    return std::make_unique<HTTP2Codec>(direction);
+  } else {
+    if (!chosenProto.empty() &&
+        !HTTP1xCodec::supportsNextProtocol(chosenProto)) {
+      LOG(ERROR) << "Chosen upstream protocol "
+                 << "\"" << chosenProto << "\" is unimplemented. "
+                 << "Attempting to use HTTP/1.1";
     }
+
+    return std::make_unique<HTTP1xCodec>(direction, forceHTTP1xCodecTo1_1_);
+  }
 }
-}
+} // namespace proxygen

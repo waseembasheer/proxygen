@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include "proxygen/lib/http/connpool/SessionHolder.h"
 
 #include <folly/Random.h>
@@ -165,11 +164,16 @@ void SessionHolder::onIngressError(const HTTPSessionBase& session,
 }
 
 void SessionHolder::onRead(const HTTPSessionBase& session, size_t bytesRead) {
+  onRead(session, bytesRead, folly::none);
+}
+void SessionHolder::onRead(const HTTPSessionBase& session,
+                           size_t bytesRead,
+                           folly::Optional<HTTPCodec::StreamID> streamId) {
   if (stats_) {
     stats_->onRead(bytesRead);
   }
   if (originalSessionInfoCb_) {
-    originalSessionInfoCb_->onRead(session, bytesRead);
+    originalSessionInfoCb_->onRead(session, bytesRead, streamId);
   }
 }
 

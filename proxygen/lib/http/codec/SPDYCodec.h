@@ -1,30 +1,29 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <bitset>
-#include <folly/Optional.h>
 #include <deque>
+#include <folly/Optional.h>
 #include <proxygen/lib/http/HTTPHeaders.h>
 #include <proxygen/lib/http/codec/HTTPCodec.h>
 #include <proxygen/lib/http/codec/HTTPParallelCodec.h>
 #include <proxygen/lib/http/codec/HTTPSettings.h>
 #include <proxygen/lib/http/codec/SPDYConstants.h>
 #include <proxygen/lib/http/codec/SPDYVersionSettings.h>
-#include <proxygen/lib/http/codec/compress/HPACKCodec.h>
 #include <proxygen/lib/http/codec/compress/GzipHeaderCodec.h>
+#include <proxygen/lib/http/codec/compress/HPACKCodec.h>
 #include <zlib.h>
 
 namespace folly { namespace io {
 class Cursor;
-}}
+}} // namespace folly::io
 
 namespace proxygen {
 
@@ -33,8 +32,8 @@ namespace proxygen {
  * SPDY. Instances of this class must not be used from multiple threads
  * concurrently.
  */
-class SPDYCodec: public HTTPParallelCodec {
-public:
+class SPDYCodec : public HTTPParallelCodec {
+ public:
   static const StreamID NoStream = 0;
 
   explicit SPDYCodec(TransportDirection direction,
@@ -50,7 +49,9 @@ public:
   bool supportsStreamFlowControl() const override;
   bool supportsSessionFlowControl() const override;
   size_t onIngress(const folly::IOBuf& buf) override;
-  bool supportsPushTransactions() const override { return true; }
+  bool supportsPushTransactions() const override {
+    return true;
+  }
   void generateHeader(folly::IOBufQueue& writeBuf,
                       StreamID stream,
                       const HTTPMessage& msg,
@@ -75,19 +76,19 @@ public:
   size_t generateTrailers(folly::IOBufQueue& writeBuf,
                           StreamID stream,
                           const HTTPHeaders& trailers) override;
-  size_t generateEOM(folly::IOBufQueue& writeBuf,
-                     StreamID stream) override;
+  size_t generateEOM(folly::IOBufQueue& writeBuf, StreamID stream) override;
   size_t generateRstStream(folly::IOBufQueue& writeBuf,
                            StreamID txn,
                            ErrorCode statusCode) override;
   size_t generateGoaway(
-    folly::IOBufQueue& writeBuf,
-    StreamID lastStream,
-    ErrorCode statusCode,
-    std::unique_ptr<folly::IOBuf> debugData = nullptr) override;
-  size_t generatePingRequest(folly::IOBufQueue& writeBuf) override;
-  size_t generatePingReply(folly::IOBufQueue& writeBuf,
-                           uint64_t uniqueID) override;
+      folly::IOBufQueue& writeBuf,
+      StreamID lastStream,
+      ErrorCode statusCode,
+      std::unique_ptr<folly::IOBuf> debugData = nullptr) override;
+  size_t generatePingRequest(
+      folly::IOBufQueue& writeBuf,
+      folly::Optional<uint64_t> data = folly::none) override;
+  size_t generatePingReply(folly::IOBufQueue& writeBuf, uint64_t data) override;
   size_t generateSettings(folly::IOBufQueue& writeBuf) override;
   size_t generateWindowUpdate(folly::IOBufQueue& writeBuf,
                               StreamID stream,
@@ -104,7 +105,9 @@ public:
   /**
    * Returns a reference to the egress settings
    */
-  HTTPSettings* getEgressSettings() override { return &egressSettings_; }
+  HTTPSettings* getEgressSettings() override {
+    return &egressSettings_;
+  }
   uint32_t getDefaultWindowSize() const override {
     return spdy::kInitialWindow;
   }
@@ -124,27 +127,18 @@ public:
     headerCodec_.setStats(stats);
   }
 
-  size_t addPriorityNodes(
-      PriorityQueue& queue,
-      folly::IOBufQueue& writeBuf,
-      uint8_t maxLevel) override;
+  size_t addPriorityNodes(PriorityQueue& queue,
+                          folly::IOBufQueue& writeBuf,
+                          uint8_t maxLevel) override;
 
-  StreamID mapPriorityToDependency(uint8_t priority) const override {
-    return MAX_STREAM_ID + priority;
-  }
+  StreamID mapPriorityToDependency(uint8_t priority) const override;
 
-  int8_t mapDependencyToPriority(StreamID parent) const override {
-    if (parent >= MAX_STREAM_ID) {
-      return parent - MAX_STREAM_ID;
-    }
-    return -1;
-  }
+  int8_t mapDependencyToPriority(StreamID parent) const override;
 
   struct SettingData {
     SettingData(uint8_t inFlags, uint32_t inId, uint32_t inValue)
-        : flags(inFlags),
-          id(inId),
-          value(inValue) {}
+        : flags(inFlags), id(inId), value(inValue) {
+    }
     uint8_t flags;
     uint32_t id;
     uint32_t value;
@@ -158,7 +152,6 @@ public:
   static folly::Optional<SPDYVersion> getVersion(const std::string& protocol);
 
  private:
-
   /**
    * Generates a frame of type SYN_STREAM
    */
@@ -180,8 +173,7 @@ public:
   /**
    * Generates the shared parts of a ping request and reply.
    */
-  size_t generatePingCommon(folly::IOBufQueue& writeBuf,
-                            uint64_t uniqueID);
+  size_t generatePingCommon(folly::IOBufQueue& writeBuf, uint64_t data);
   /**
    * Ingress parser, can throw exceptions
    */
@@ -192,7 +184,8 @@ public:
    * SPDY session, this frame is the equivalent of an HTTP request header.
    */
   void onSynStream(uint32_t assocStream,
-                   uint8_t pri, uint8_t slot,
+                   uint8_t pri,
+                   uint8_t slot,
                    const compress::HeaderPieceList& headers,
                    const HTTPHeaderSize& size);
   /**
@@ -211,10 +204,9 @@ public:
    */
   void onSettings(const SettingList& settings);
 
-  void onPing(uint32_t uniqueID) noexcept;
+  void onPing(uint32_t data) noexcept;
 
-  void onGoaway(uint32_t lastGoodStream,
-                uint32_t statusCode) noexcept;
+  void onGoaway(uint32_t lastGoodStream, uint32_t statusCode) noexcept;
   /**
    * Handle a HEADERS frame. This is *not* invoked when the first headers
    * on a stream are received. This is called when the remote endpoint
@@ -231,8 +223,10 @@ public:
    * object initialized for this transaction.
    */
   std::unique_ptr<HTTPMessage> parseHeaders(
-    TransportDirection direction, StreamID streamID,
-    StreamID assocStreamID, const compress::HeaderPieceList& headers);
+      TransportDirection direction,
+      StreamID streamID,
+      StreamID assocStreamID,
+      const compress::HeaderPieceList& headers);
 
   /**
    * Helper function to parse out a control frame and execute its handler.
@@ -255,7 +249,8 @@ public:
                    int8_t pri,
                    const HTTPHeaderSize& size);
 
-  void deliverOnMessageBegin(StreamID streamID, StreamID assocStreamID,
+  void deliverOnMessageBegin(StreamID streamID,
+                             StreamID assocStreamID,
                              HTTPMessage* msg);
 
   /**
@@ -283,10 +278,10 @@ public:
    *                 wants to put some other data there.
    */
   std::unique_ptr<folly::IOBuf> serializeRequestHeaders(
-    const HTTPMessage& msg,
-    bool isPushed,
-    uint32_t headroom = 0,
-    HTTPHeaderSize* size = nullptr);
+      const HTTPMessage& msg,
+      bool isPushed,
+      uint32_t headroom = 0,
+      HTTPHeaderSize* size = nullptr);
 
   /**
    * Serializes headers for responses (aka SYN_REPLY)
@@ -297,9 +292,9 @@ public:
    *                 wants to put some other data there.
    */
   std::unique_ptr<folly::IOBuf> serializeResponseHeaders(
-     const HTTPMessage& msg,
-     uint32_t headroom = 0,
-     HTTPHeaderSize* size = nullptr);
+      const HTTPMessage& msg,
+      uint32_t headroom = 0,
+      HTTPHeaderSize* size = nullptr);
 
   /**
    * Helper function to create the compressed Name/Value representation of
@@ -312,11 +307,14 @@ public:
    *                 wants to put some other data there.
    */
   std::unique_ptr<folly::IOBuf> encodeHeaders(
-    const HTTPMessage& msg, std::vector<compress::Header>& headers,
-    uint32_t headroom = 0,
-    HTTPHeaderSize* size = nullptr);
+      const HTTPMessage& msg,
+      std::vector<compress::Header>& headers,
+      uint32_t headroom = 0,
+      HTTPHeaderSize* size = nullptr);
 
-  void failStream(bool newTxn, StreamID streamID, uint32_t code,
+  void failStream(bool newTxn,
+                  StreamID streamID,
+                  uint32_t code,
                   std::string excStr = empty_string);
 
   void failSession(uint32_t statusCode);
@@ -342,13 +340,11 @@ public:
   const SPDYVersionSettings& versionSettings_;
 
   HTTPSettings ingressSettings_{
-    {SettingsId::MAX_CONCURRENT_STREAMS, spdy::kMaxConcurrentStreams},
-    {SettingsId::INITIAL_WINDOW_SIZE, spdy::kInitialWindow}
-  };
+      {SettingsId::MAX_CONCURRENT_STREAMS, spdy::kMaxConcurrentStreams},
+      {SettingsId::INITIAL_WINDOW_SIZE, spdy::kInitialWindow}};
   HTTPSettings egressSettings_{
-    {SettingsId::MAX_CONCURRENT_STREAMS, spdy::kMaxConcurrentStreams},
-    {SettingsId::INITIAL_WINDOW_SIZE, spdy::kInitialWindow}
-  };
+      {SettingsId::MAX_CONCURRENT_STREAMS, spdy::kMaxConcurrentStreams},
+      {SettingsId::INITIAL_WINDOW_SIZE, spdy::kInitialWindow}};
 
   std::unique_ptr<HTTPMessage> partialMsg_;
   std::string userAgent_;
@@ -370,11 +366,11 @@ public:
     FRAME_HEADER = 0,
     CTRL_FRAME_DATA = 1,
     DATA_FRAME_DATA = 2,
-  } frameState_:2;
+  } frameState_ : 2;
 
-  bool ctrl_:1;
+  bool ctrl_ : 1;
 
   GzipHeaderCodec headerCodec_;
 };
 
-} // proxygen
+} // namespace proxygen

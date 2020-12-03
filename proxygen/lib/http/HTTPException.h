@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/Memory.h>
@@ -39,23 +38,11 @@ class HTTPException : public proxygen::Exception {
     INGRESS_AND_EGRESS,
   };
 
-  explicit HTTPException(Direction dir, const std::string& msg)
-      : Exception(msg),
-        dir_(dir) {}
+  HTTPException(Direction dir, const std::string& msg);
 
-  HTTPException(const HTTPException& ex) :
-      Exception(static_cast<const Exception&>(ex)),
-      dir_(ex.dir_),
-      httpStatusCode_(ex.httpStatusCode_),
-      codecStatusCode_(ex.codecStatusCode_),
-      errno_(ex.errno_) {
-    if (ex.currentIngressBuf_) {
-      currentIngressBuf_ = ex.currentIngressBuf_->clone();
-    }
-    if (ex.partialMsg_) {
-      partialMsg_ = std::make_unique<HTTPMessage>(*ex.partialMsg_.get());
-    }
-  }
+  HTTPException(Direction dir, const char* msg);
+
+  HTTPException(const HTTPException& ex);
 
   /**
    * Returns a string representation of this exception. This function is
@@ -69,13 +56,11 @@ class HTTPException : public proxygen::Exception {
   }
 
   bool isIngressException() const {
-    return dir_ == Direction::INGRESS ||
-      dir_ == Direction::INGRESS_AND_EGRESS;
+    return dir_ == Direction::INGRESS || dir_ == Direction::INGRESS_AND_EGRESS;
   }
 
   bool isEgressException() const {
-    return dir_ == Direction::EGRESS ||
-      dir_ == Direction::INGRESS_AND_EGRESS;
+    return dir_ == Direction::EGRESS || dir_ == Direction::INGRESS_AND_EGRESS;
   }
 
   // Accessors for HTTP error codes
@@ -93,7 +78,7 @@ class HTTPException : public proxygen::Exception {
 
   // Accessors for Codec specific status codes
   bool hasCodecStatusCode() const {
-    return codecStatusCode_.hasValue();
+    return codecStatusCode_.has_value();
   }
   void setCodecStatusCode(ErrorCode statusCode) {
     codecStatusCode_ = statusCode;
@@ -131,7 +116,6 @@ class HTTPException : public proxygen::Exception {
   }
 
  private:
-
   Direction dir_;
   uint32_t httpStatusCode_{0};
   folly::Optional<ErrorCode> codecStatusCode_;
@@ -144,4 +128,4 @@ class HTTPException : public proxygen::Exception {
 
 std::ostream& operator<<(std::ostream& os, const HTTPException& ex);
 
-}
+} // namespace proxygen

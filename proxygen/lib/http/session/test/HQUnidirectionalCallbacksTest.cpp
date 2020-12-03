@@ -1,11 +1,9 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 #include "proxygen/lib/http/session/test/HQSessionMocks.h"
@@ -16,9 +14,7 @@
 
 using namespace proxygen;
 using namespace quic;
-using namespace folly;
 using namespace testing;
-using namespace std::chrono;
 
 class UnidirectionalReadDispatcherTest : public Test {
  public:
@@ -29,8 +25,8 @@ class UnidirectionalReadDispatcherTest : public Test {
   void SetUp() override {
     incomingData_.clear();
     dispatcherCallback_ = std::make_unique<MockDispatcher>();
-    dispatcher_ =
-        std::make_unique<HQUnidirStreamDispatcher>(*dispatcherCallback_);
+    dispatcher_ = std::make_unique<HQUnidirStreamDispatcher>(
+        *dispatcherCallback_, proxygen::TransportDirection::UPSTREAM);
   }
 
   void TearDown() override {

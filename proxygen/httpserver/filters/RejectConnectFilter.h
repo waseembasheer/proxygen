@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/httpserver/Filters.h>
@@ -20,7 +19,7 @@ namespace proxygen {
  */
 class RejectConnectFilter : public Filter {
  public:
-  explicit RejectConnectFilter(RequestHandler* upstream): Filter(upstream) {
+  explicit RejectConnectFilter(RequestHandler* upstream) : Filter(upstream) {
   }
 
   void onRequest(std::unique_ptr<HTTPMessage> /*msg*/) noexcept override {
@@ -30,9 +29,11 @@ class RejectConnectFilter : public Filter {
     ResponseBuilder(downstream_).rejectUpgradeRequest();
   }
 
-  void onBody(std::unique_ptr<folly::IOBuf> /*body*/) noexcept override {}
+  void onBody(std::unique_ptr<folly::IOBuf> /*body*/) noexcept override {
+  }
 
-  void onUpgrade(UpgradeProtocol /*protocol*/) noexcept override {}
+  void onUpgrade(UpgradeProtocol /*protocol*/) noexcept override {
+  }
 
   void onEOM() noexcept override {
   }
@@ -59,11 +60,14 @@ class RejectConnectFilter : public Filter {
   }
 
   // Response handler
-  void sendHeaders(HTTPMessage& /*msg*/) noexcept override {}
+  void sendHeaders(HTTPMessage& /*msg*/) noexcept override {
+  }
 
-  void sendChunkHeader(size_t /*len*/) noexcept override {}
+  void sendChunkHeader(size_t /*len*/) noexcept override {
+  }
 
-  void sendBody(std::unique_ptr<folly::IOBuf> /*body*/) noexcept override {}
+  void sendBody(std::unique_ptr<folly::IOBuf> /*body*/) noexcept override {
+  }
 
   void sendChunkTerminator() noexcept override {
   }
@@ -80,13 +84,14 @@ class RejectConnectFilter : public Filter {
 
 class RejectConnectFilterFactory : public RequestHandlerFactory {
  public:
-  void onServerStart(folly::EventBase* /*evb*/) noexcept override {}
+  void onServerStart(folly::EventBase* /*evb*/) noexcept override {
+  }
 
   void onServerStop() noexcept override {
   }
 
-  RequestHandler* onRequest(RequestHandler* h, HTTPMessage* msg)
-      noexcept override {
+  RequestHandler* onRequest(RequestHandler* h,
+                            HTTPMessage* msg) noexcept override {
 
     if (msg->getMethod() == HTTPMethod::CONNECT) {
       return new RejectConnectFilter(h);
@@ -97,4 +102,4 @@ class RejectConnectFilterFactory : public RequestHandlerFactory {
   }
 };
 
-}
+} // namespace proxygen

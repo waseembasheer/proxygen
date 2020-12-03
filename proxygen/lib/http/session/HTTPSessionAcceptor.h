@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/io/async/AsyncSSLSocket.h>
@@ -46,20 +45,6 @@ class HTTPSessionAcceptor
    */
   const HTTPErrorPage* getDefaultErrorPage() const {
     return defaultErrorPage_.get();
-  }
-
-  /**
-   * Set an alternate error page generator to use for internal clients.
-   */
-  void setDiagnosticErrorPage(std::unique_ptr<HTTPErrorPage> generator) {
-    diagnosticErrorPage_ = std::move(generator);
-  }
-
-  /**
-   * Access the diagnostic error page generator.
-   */
-  const HTTPErrorPage* getDiagnosticErrorPage() const {
-    return diagnosticErrorPage_.get();
   }
 
   /**
@@ -109,6 +94,10 @@ class HTTPSessionAcceptor
     return accConfig_.HTTP2PrioritiesEnabled;
   }
 
+  virtual bool getHttp2PingEnabled() {
+    return accConfig_.HTTP2PingEnabled;
+  }
+
  protected:
   /**
    * This function is invoked when a new session is created to get the
@@ -122,12 +111,14 @@ class HTTPSessionAcceptor
 
   HTTPSessionStats* downstreamSessionStats_{nullptr};
 
+  bool setEnableConnectProtocol_{false};
+
   HTTPSession::InfoCallback* getSessionInfoCallback() {
     return sessionInfoCb_ ? sessionInfoCb_ : this;
   }
 
   // Acceptor methods
-  void onNewConnection(folly::AsyncTransportWrapper::UniquePtr sock,
+  void onNewConnection(folly::AsyncTransport::UniquePtr sock,
                        const folly::SocketAddress* address,
                        const std::string& nextProtocol,
                        wangle::SecureTransportType secureTransportType,
@@ -150,9 +141,6 @@ class HTTPSessionAcceptor
 
   /** General-case error page generator */
   std::unique_ptr<HTTPErrorPage> defaultErrorPage_;
-
-  /** Generator of more detailed error pages for internal clients */
-  std::unique_ptr<HTTPErrorPage> diagnosticErrorPage_;
 
   std::shared_ptr<HTTPCodecFactory> codecFactory_{};
 

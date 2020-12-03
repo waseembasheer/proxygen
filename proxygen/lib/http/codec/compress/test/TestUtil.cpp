@@ -1,19 +1,18 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/compress/test/TestUtil.h>
 #include <proxygen/lib/http/codec/compress/test/TestStreamingCallback.h>
 
-#include <fstream>
-#include <glog/logging.h>
 #include <folly/io/Cursor.h>
 #include <folly/portability/GTest.h>
+#include <fstream>
+#include <glog/logging.h>
 #include <proxygen/lib/http/codec/compress/Logging.h>
 
 using folly::IOBuf;
@@ -29,7 +28,7 @@ void dumpToFile(const string& filename, const IOBuf* buf) {
   if (buf) {
     const IOBuf* p = buf;
     do {
-      outfile.write((const char *)p->data(), p->length());
+      outfile.write((const char*)p->data(), p->length());
       p = p->next();
     } while (p->next() != buf);
   }
@@ -52,10 +51,9 @@ void verifyHeaders(vector<HPACKHeader>& headers,
   }
 }
 
-unique_ptr<IOBuf> encodeDecode(
-    vector<HPACKHeader>& headers,
-    HPACKEncoder& encoder,
-    HPACKDecoder& decoder) {
+unique_ptr<IOBuf> encodeDecode(vector<HPACKHeader>& headers,
+                               HPACKEncoder& encoder,
+                               HPACKDecoder& decoder) {
   unique_ptr<IOBuf> encoded = encoder.encode(headers);
   auto decodedHeaders = hpack::decode(decoder, encoded.get());
   CHECK(!decoder.hasError());
@@ -69,10 +67,9 @@ unique_ptr<IOBuf> encodeDecode(
   return encoded;
 }
 
-void encodeDecode(
-    vector<HPACKHeader>& headers,
-    QPACKEncoder& encoder,
-    QPACKDecoder& decoder) {
+void encodeDecode(vector<HPACKHeader>& headers,
+                  QPACKEncoder& encoder,
+                  QPACKDecoder& decoder) {
   auto encoded = encoder.encode(headers, 0, 1);
   TestStreamingCallback cb;
   if (encoded.control) {
@@ -115,15 +112,14 @@ vector<compress::Header> headersFromArray(vector<vector<string>>& a) {
 
 vector<compress::Header> basicHeaders() {
   static vector<vector<string>> headersStrings = {
-    {":path", "/index.php"},
-    {":authority", "www.facebook.com"},
-    {":method", "GET"},
-    {":scheme", "https"},
-    {"Host", "www.facebook.com"},
-    {"accept-encoding", "gzip"}
-  };
+      {":path", "/index.php"},
+      {":authority", "www.facebook.com"},
+      {":method", "GET"},
+      {":scheme", "https"},
+      {"Host", "www.facebook.com"},
+      {"accept-encoding", "gzip"}};
   static vector<compress::Header> headers = headersFromArray(headersStrings);
   return headers;
 }
 
-}}
+}} // namespace proxygen::hpack

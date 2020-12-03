@@ -1,15 +1,16 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/Optional.h>
+#include <folly/lang/Assume.h>
+#include <proxygen/lib/http/HTTPException.h>
 #include <proxygen/lib/http/codec/HQUnidirectionalCodec.h>
 #include <proxygen/lib/http/codec/HTTP1xCodec.h>
 #include <proxygen/lib/http/codec/HTTPChecks.h>
@@ -172,6 +173,10 @@ class HQStreamMapping {
 
   virtual bool hasEgressStreamId() const = 0;
 
+  bool hasStreamId() const {
+    return hasIngressStreamId() || hasEgressStreamId();
+  }
+
   // Safe way to check whether this HQStream is using that quicStream
   // see usage in HQSession::findControlStream
   virtual bool isUsing(quic::StreamId /* streamId */) const = 0;
@@ -181,6 +186,8 @@ class HQStreamMapping {
   virtual void setIngressStreamId(quic::StreamId /* streamId */) = 0;
 
   virtual void setEgressStreamId(quic::StreamId /* streamId */) = 0;
+
+  virtual HTTPException::Direction getStreamDirection() const = 0;
 };
 
 /**
@@ -200,6 +207,8 @@ class HQStreamBase
   virtual ~HQStreamBase() = default;
 
   const HTTPCodec& getCodec() const noexcept;
+
+  HQSession& getSession() const noexcept;
 
   folly::Function<void()> setActiveCodec(const std::string& /* where */);
 
@@ -270,11 +279,11 @@ class SSBidir : public virtual HQStreamMapping {
   }
 
   bool hasIngressStreamId() const override {
-    return streamId_.hasValue();
+    return streamId_.has_value();
   }
 
   bool hasEgressStreamId() const override {
-    return streamId_.hasValue();
+    return streamId_.has_value();
   }
 
   quic::StreamId getStreamId() const override {
@@ -288,6 +297,10 @@ class SSBidir : public virtual HQStreamMapping {
 
   void setEgressStreamId(quic::StreamId streamId) override {
     streamId_ = streamId;
+  }
+
+  virtual HTTPException::Direction getStreamDirection() const override {
+    return HTTPException::Direction::INGRESS_AND_EGRESS;
   }
 
  protected:
@@ -307,6 +320,7 @@ class SSEgress : public SSBidir {
 
   quic::StreamId getIngressStreamId() const override {
     LOG(FATAL) << "Egress only stream can not be used for ingress";
+    folly::assume_unreachable();
   }
 
   void setIngressStreamId(quic::StreamId /* streamId */) override {
@@ -316,6 +330,11 @@ class SSEgress : public SSBidir {
   bool hasIngressStreamId() const override {
     return false;
   }
+
+  virtual HTTPException::Direction getStreamDirection() const override {
+    return HTTPException::Direction::EGRESS;
+  }
+
 }; // proxygen::detail::singlestream::Egress
 
 class SSIngress : public SSBidir {
@@ -328,6 +347,7 @@ class SSIngress : public SSBidir {
 
   quic::StreamId getEgressStreamId() const override {
     LOG(FATAL) << "Ingress only stream can not be used for egress";
+    folly::assume_unreachable();
   }
 
   void setEgressStreamId(quic::StreamId /* streamId */) override {
@@ -337,6 +357,11 @@ class SSIngress : public SSBidir {
   bool hasEgressStreamId() const override {
     return false;
   }
+
+  virtual HTTPException::Direction getStreamDirection() const override {
+    return HTTPException::Direction::INGRESS;
+  }
+
 }; // proxygen::detail::singlestream::Ingres
 } // namespace singlestream
 
@@ -383,15 +408,16 @@ class CSBidir : public virtual HQStreamMapping {
   }
 
   bool hasIngressStreamId() const override {
-    return ingressStreamId_.hasValue();
+    return ingressStreamId_.has_value();
   }
 
   bool hasEgressStreamId() const override {
-    return egressStreamId_.hasValue();
+    return egressStreamId_.has_value();
   }
 
   quic::StreamId getStreamId() const override {
     LOG(FATAL) << "Ambiguous call 'getStreamId' on a composite stream";
+    folly::assume_unreachable();
   }
 
   void setIngressStreamId(quic::StreamId streamId) override {
@@ -400,6 +426,10 @@ class CSBidir : public virtual HQStreamMapping {
 
   void setEgressStreamId(quic::StreamId streamId) override {
     egressStreamId_ = streamId;
+  }
+
+  virtual HTTPException::Direction getStreamDirection() const override {
+    return HTTPException::Direction::INGRESS_AND_EGRESS;
   }
 
  private:

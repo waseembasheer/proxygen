@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/transport/PersistentQuicPskCache.h>
 
 #include <folly/Conv.h>
@@ -14,7 +13,7 @@
 
 namespace {
 constexpr auto FIZZ_PSK = "psk";
-constexpr auto QUIC_PARAMS = "quic";
+constexpr auto QUIC_PARAMS = "quic1";
 constexpr auto USES = "uses";
 } // namespace
 
@@ -38,12 +37,12 @@ folly::Optional<quic::QuicCachedPsk> PersistentQuicPskCache::getPsk(
   }
   try {
     quic::QuicCachedPsk quicCachedPsk;
-    quicCachedPsk.cachedPsk = deserializePsk(cachedPsk->fizzPsk, *factory_);
+    quicCachedPsk.cachedPsk =
+        fizz::client::deserializePsk(cachedPsk->fizzPsk, *factory_);
 
     auto buf = folly::IOBuf::wrapBuffer(cachedPsk->quicParams.data(),
                                         cachedPsk->quicParams.length());
     folly::io::Cursor cursor(buf.get());
-    fizz::detail::read(quicCachedPsk.transportParams.negotiatedVersion, cursor);
     fizz::detail::read(quicCachedPsk.transportParams.idleTimeout, cursor);
     fizz::detail::read(quicCachedPsk.transportParams.maxRecvPacketSize, cursor);
     fizz::detail::read(quicCachedPsk.transportParams.initialMaxData, cursor);
@@ -79,12 +78,10 @@ folly::Optional<quic::QuicCachedPsk> PersistentQuicPskCache::getPsk(
 void PersistentQuicPskCache::putPsk(const std::string& identity,
                                     quic::QuicCachedPsk quicCachedPsk) {
   PersistentQuicCachedPsk cachedPsk;
-  cachedPsk.fizzPsk = serializePsk(quicCachedPsk.cachedPsk);
+  cachedPsk.fizzPsk = fizz::client::serializePsk(quicCachedPsk.cachedPsk);
 
   auto quicParams = folly::IOBuf::create(0);
   folly::io::Appender appender(quicParams.get(), 512);
-  fizz::detail::write(quicCachedPsk.transportParams.negotiatedVersion,
-                      appender);
   fizz::detail::write(quicCachedPsk.transportParams.idleTimeout, appender);
   fizz::detail::write(quicCachedPsk.transportParams.maxRecvPacketSize,
                       appender);

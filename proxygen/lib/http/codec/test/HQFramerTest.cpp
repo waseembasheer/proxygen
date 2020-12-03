@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/test/HQFramerTest.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/HTTP3ErrorCode.h>
@@ -68,6 +67,24 @@ class HQFramerTestFixture : public T {
 
 class HQFramerTest : public HQFramerTestFixture<testing::Test> {};
 
+TEST_F(HQFramerTest, TestValidPushId) {
+  PushId maxValidPushId = 10 | kPushIdMask;
+  PushId validPushId = 9 | kPushIdMask;
+  PushId exceedingPushId = 11 | kPushIdMask;
+
+  auto expectValid = isValidPushId(maxValidPushId, validPushId);
+  EXPECT_TRUE(expectValid);
+
+  auto expectTooLarge = isValidPushId(maxValidPushId, exceedingPushId);
+  EXPECT_FALSE(expectTooLarge);
+
+  auto expectMatching = isValidPushId(maxValidPushId, maxValidPushId);
+  EXPECT_TRUE(expectMatching);
+
+  auto expectEmpty = isValidPushId(folly::none, validPushId);
+  EXPECT_FALSE(expectEmpty);
+}
+
 TEST_F(HQFramerTest, TestWriteFrameHeaderManual) {
   auto res = writeFrameHeaderManual(
       queue_, 0, static_cast<uint8_t>(proxygen::hq::FrameType::DATA));
@@ -90,10 +107,7 @@ TEST_F(HQFramerTest, DataFrameZeroLength) {
   FrameHeader outHeader;
   std::unique_ptr<IOBuf> outBuf;
   Cursor cursor(queue_.front());
-  parse(HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_DATA,
-        parseData,
-        outHeader,
-        outBuf);
+  parse(HTTP3::ErrorCode::HTTP_FRAME_ERROR, parseData, outHeader, outBuf);
 }
 
 struct FrameHeaderLengthParams {
@@ -130,217 +144,11 @@ INSTANTIATE_TEST_CASE_P(
     Values((DataOnlyFrameParams){proxygen::hq::FrameType::DATA,
                                  writeData,
                                  parseData,
-                                 HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_DATA},
-           (DataOnlyFrameParams){
-               proxygen::hq::FrameType::HEADERS,
-               writeHeaders,
-               parseHeaders,
-               HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_HEADERS}));
-
-TEST_F(HQFramerTest, ParsePriorityFrameOk) {
-  auto result = writePriority(queue_,
-                              {
-                                  // prioritizedType
-                                  PriorityElementType::REQUEST_STREAM,
-                                  // dependencyType
-                                  PriorityElementType::REQUEST_STREAM,
-                                  true, // exclusive
-                                  123,  // prioritizedElementId
-                                  234,  // elementDependencyId
-                                  30,   // weight
-                              });
-  EXPECT_FALSE(result.hasError());
-
-  FrameHeader header;
-  PriorityUpdate priority;
-  parse(folly::none, &parsePriority, header, priority);
-
-  EXPECT_EQ(FrameType::PRIORITY, header.type);
-  EXPECT_EQ(priority.prioritizedType, PriorityElementType::REQUEST_STREAM);
-  EXPECT_EQ(priority.dependencyType, PriorityElementType::REQUEST_STREAM);
-  EXPECT_TRUE(priority.exclusive);
-  EXPECT_EQ(123, priority.prioritizedElementId);
-  EXPECT_EQ(234, priority.elementDependencyId);
-  EXPECT_EQ(30, priority.weight);
-}
-
-TEST_F(HQFramerTest, ParsePriorityFramePrioritizeRoot) {
-  auto result = writePriority(queue_,
-                              {
-                                  // prioritizedType
-                                  PriorityElementType::TREE_ROOT,
-                                  // dependencyType
-                                  PriorityElementType::REQUEST_STREAM,
-                                  true, // exclusive
-                                  123,  // prioritizedElementId
-                                  234,  // elementDependencyId
-                                  30,   // weight
-                              });
-  EXPECT_FALSE(result.hasError());
-
-  FrameHeader header;
-  PriorityUpdate priority;
-  parse(HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_PRIORITY,
-        &parsePriority,
-        header,
-        priority);
-}
-
-TEST_F(HQFramerTest, ParsePriorityFramePrioritizedIdOptional) {
-  auto result = writePriority(queue_,
-                              {
-                                  // prioritizedType
-                                  PriorityElementType::REQUEST_STREAM,
-                                  // dependencyType
-                                  PriorityElementType::TREE_ROOT,
-                                  true, // exclusive
-                                  123,  // prioritizedElementId
-                                  234,  // elementDependencyId (ignored!)
-                                  30,   // weight
-                              });
-  EXPECT_FALSE(result.hasError());
-
-  FrameHeader header;
-  PriorityUpdate priority;
-
-  parse(folly::none, &parsePriority, header, priority);
-  EXPECT_EQ(FrameType::PRIORITY, header.type);
-  EXPECT_EQ(priority.prioritizedType, PriorityElementType::REQUEST_STREAM);
-  EXPECT_EQ(priority.dependencyType, PriorityElementType::TREE_ROOT);
-  EXPECT_TRUE(priority.exclusive);
-  EXPECT_EQ(123, priority.prioritizedElementId);
-  EXPECT_EQ(0, priority.elementDependencyId);
-  EXPECT_EQ(30, priority.weight);
-}
-
-TEST_F(HQFramerTest, ParsePriorityWrongWeight) {
-  auto result = writePriority(queue_,
-                              {
-                                  // prioritizedType
-                                  PriorityElementType::REQUEST_STREAM,
-                                  // dependencyType
-                                  PriorityElementType::REQUEST_STREAM,
-                                  true, // exclusive
-                                  1,    // prioritizedElementId
-                                  2,    // elementDependencyId
-                                  30,   // weight
-                              });
-  EXPECT_FALSE(result.hasError());
-  // Flip a bit in the buffer so to force the varlength integer parsing logic
-  // to read extra bytes for prioritizedElementId.
-  auto buf = queue_.move();
-  buf->coalesce();
-  RWPrivateCursor cursor(buf.get());
-  // 2 bytes frame header (payload length is 4) + 1 byte for flags
-  cursor.skip(3);
-  // This will cause the parser to not have enough data to read for the
-  // weight field
-  cursor.writeBE<uint8_t>(0x42);
-  queue_.append(std::move(buf));
-
-  FrameHeader header;
-  PriorityUpdate priority;
-  parse(HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_PRIORITY,
-        &parsePriority,
-        header,
-        priority);
-}
-
-TEST_F(HQFramerTest, ParsePriorityWrongElementDependency) {
-  auto result = writePriority(queue_,
-                              {
-                                  // prioritizedType
-                                  PriorityElementType::REQUEST_STREAM,
-                                  // dependencyType
-                                  PriorityElementType::REQUEST_STREAM,
-                                  true, // exclusive
-                                  1,    // prioritizedElementId
-                                  2,    // elementDependencyId
-                                  255,  // weight
-                              });
-  EXPECT_FALSE(result.hasError());
-  // Flip a bit in the buffer so to force the varlength integer parsing logic
-  // to read extra bytes for prioritizedElementId.
-  auto buf = queue_.move();
-  buf->coalesce();
-  RWPrivateCursor cursor(buf.get());
-  // 2 bytes frame header (payload length is 4) + 1 byte for flags
-  cursor.skip(3);
-  // This will cause the parser to read two bytes (instead of 1) for the
-  // prioritizedElementId, then one byte for the elementDependencyId from what
-  // was written as the weight field. weight being all 1s the parser will try to
-  // read an 8-byte quic integer and there are not enough bytes available
-  cursor.writeBE<uint8_t>(0x42);
-  queue_.append(std::move(buf));
-
-  FrameHeader header;
-  PriorityUpdate priority;
-  parse(HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_PRIORITY,
-        &parsePriority,
-        header,
-        priority);
-}
-
-TEST_F(HQFramerTest, ParsePriorityTrailingJunk) {
-  auto result = writePriority(queue_,
-                              {
-                                  // prioritizedType
-                                  PriorityElementType::REQUEST_STREAM,
-                                  // dependencyType
-                                  PriorityElementType::REQUEST_STREAM,
-                                  true, // exclusive
-                                  1,    // prioritizedElementId
-                                  2,    // elementDependencyId
-                                  255,  // weight
-                              });
-  EXPECT_FALSE(result.hasError());
-  // Trim the frame header off
-  queue_.trimStart(2);
-  auto buf = queue_.move();
-  // Put in a new frame header (too long)
-  auto badLength = buf->computeChainDataLength() + 4;
-  writeFrameHeaderManual(
-      queue_, static_cast<uint64_t>(FrameType::PRIORITY), badLength);
-  queue_.append(std::move(buf));
-  queue_.append(IOBuf::copyBuffer("junk"));
-
-  FrameHeader header;
-  PriorityUpdate priority;
-  parse(HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_PRIORITY,
-        &parsePriority,
-        header,
-        priority);
-}
-
-TEST_F(HQFramerTest, ParsePriorityFrameMalformedEmpty) {
-  auto result = writePriority(queue_,
-                              {
-                                  // prioritizedType
-                                  PriorityElementType::REQUEST_STREAM,
-                                  // dependencyType
-                                  PriorityElementType::REQUEST_STREAM,
-                                  true, // exclusive
-                                  1,    // prioritizedElementId
-                                  2,    // elementDependencyId
-                                  30,   // weight
-                              });
-  EXPECT_FALSE(result.hasError());
-  // modify the flags field so that the 'empty' field is not zero
-  auto buf = queue_.move();
-  buf->coalesce();
-  RWPrivateCursor cursor(buf.get());
-  // 2 bytes frame header (payload length is 4)
-  cursor.skip(2);
-  cursor.writeBE<uint8_t>(0x0E);
-  queue_.append(std::move(buf));
-
-  FrameHeader header;
-  PriorityUpdate priority;
-  parse(HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_PRIORITY,
-        &parsePriority,
-        header,
-        priority);
-}
+                                 HTTP3::ErrorCode::HTTP_FRAME_ERROR},
+           (DataOnlyFrameParams){proxygen::hq::FrameType::HEADERS,
+                                 writeHeaders,
+                                 parseHeaders,
+                                 HTTP3::ErrorCode::HTTP_FRAME_ERROR}));
 
 TEST_F(HQFramerTest, ParsePushPromiseFrameOK) {
   auto data = makeBuf(1000);
@@ -449,24 +257,21 @@ TEST_P(HQFramerTestIdOnlyFrames, TestIdOnlyFrame) {
 INSTANTIATE_TEST_CASE_P(
     IdOnlyFrameWriteParseTests,
     HQFramerTestIdOnlyFrames,
-    Values(
-        (IdOnlyFrameParams){proxygen::hq::FrameType::CANCEL_PUSH,
-                            writeCancelPush,
-                            parseCancelPush,
-                            HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_CANCEL_PUSH},
-        (IdOnlyFrameParams){proxygen::hq::FrameType::GOAWAY,
-                            writeGoaway,
-                            parseGoaway,
-                            HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_GOAWAY},
-        (IdOnlyFrameParams){
-            proxygen::hq::FrameType::MAX_PUSH_ID,
-            writeMaxPushId,
-            parseMaxPushId,
-            HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_MAX_PUSH_ID}));
+    Values((IdOnlyFrameParams){proxygen::hq::FrameType::CANCEL_PUSH,
+                               writeCancelPush,
+                               parseCancelPush,
+                               HTTP3::ErrorCode::HTTP_FRAME_ERROR},
+           (IdOnlyFrameParams){proxygen::hq::FrameType::GOAWAY,
+                               writeGoaway,
+                               parseGoaway,
+                               HTTP3::ErrorCode::HTTP_FRAME_ERROR},
+           (IdOnlyFrameParams){proxygen::hq::FrameType::MAX_PUSH_ID,
+                               writeMaxPushId,
+                               parseMaxPushId,
+                               HTTP3::ErrorCode::HTTP_FRAME_ERROR}));
 
 TEST_F(HQFramerTest, SettingsFrameOK) {
   deque<hq::SettingPair> settings = {
-      {hq::SettingId::NUM_PLACEHOLDERS, (SettingValue)3},
       {hq::SettingId::MAX_HEADER_LIST_SIZE, (SettingValue)4},
       // Unknown IDs get ignored, and identifiers of the format
       // "0x1f * N + 0x21" are reserved exactly for this
@@ -482,6 +287,44 @@ TEST_F(HQFramerTest, SettingsFrameOK) {
   // it must be ignored since it's a GREASE setting
   settings.pop_back();
   ASSERT_EQ(settings, outSettings);
+}
+
+TEST_F(HQFramerTest, MaxPushIdFrameOK) {
+  // Add kPushIdMask to denote this is a max Push ID
+  PushId maxPushId = 10 | hq::kPushIdMask;
+  writeMaxPushId(queue_, maxPushId);
+
+  FrameHeader header;
+  PushId resultingPushId;
+  parse(folly::none, &parseMaxPushId, header, resultingPushId);
+
+  // Ensure header of frame and Push ID value are equivalent
+  // when writing and parsing
+  ASSERT_EQ(proxygen::hq::FrameType::MAX_PUSH_ID, header.type);
+  ASSERT_EQ(maxPushId, resultingPushId);
+}
+
+TEST_F(HQFramerTest, MaxPushIdFrameLargePushId) {
+  // Test with largest possible number
+  PushId maxPushId = quic::kEightByteLimit | hq::kPushIdMask;
+  writeMaxPushId(queue_, maxPushId);
+
+  FrameHeader header;
+  PushId resultingPushId;
+  parse(folly::none, &parseMaxPushId, header, resultingPushId);
+
+  // Ensure header of frame and Push ID value are equivalent
+  // when writing and parsing
+  ASSERT_EQ(proxygen::hq::FrameType::MAX_PUSH_ID, header.type);
+  ASSERT_EQ(maxPushId, resultingPushId);
+}
+
+TEST_F(HQFramerTest, MaxPushIdTooLarge) {
+  // Test kEightByteLimit + 1 as over the limit
+  PushId maxPushId = (quic::kEightByteLimit + 1) | hq::kPushIdMask;
+  auto res = writeMaxPushId(queue_, maxPushId);
+
+  ASSERT_TRUE(res.hasError());
 }
 
 struct SettingsValuesParams {
@@ -502,7 +345,7 @@ TEST_P(HQFramerTestSettingsValues, ValueAllowed) {
   std::deque<hq::SettingPair> outSettings;
   ParseResult expectedParseResult = folly::none;
   if (!GetParam().allowed) {
-    expectedParseResult = HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_SETTINGS;
+    expectedParseResult = HTTP3::ErrorCode::HTTP_FRAME_ERROR;
   }
   parse(expectedParseResult, &parseSettings, header, outSettings);
 
@@ -517,11 +360,7 @@ TEST_P(HQFramerTestSettingsValues, ValueAllowed) {
 INSTANTIATE_TEST_CASE_P(
     SettingsValuesAllowedTests,
     HQFramerTestSettingsValues,
-    Values((SettingsValuesParams){hq::SettingId::NUM_PLACEHOLDERS, 0, true},
-           (SettingsValuesParams){hq::SettingId::NUM_PLACEHOLDERS,
-                                  std::numeric_limits<uint32_t>::max(),
-                                  true},
-           (SettingsValuesParams){hq::SettingId::MAX_HEADER_LIST_SIZE, 0, true},
+    Values((SettingsValuesParams){hq::SettingId::MAX_HEADER_LIST_SIZE, 0, true},
            (SettingsValuesParams){hq::SettingId::MAX_HEADER_LIST_SIZE,
                                   std::numeric_limits<uint32_t>::max(),
                                   true},
@@ -549,7 +388,6 @@ TEST_F(HQFramerTest, SettingsFrameEmpty) {
 
 TEST_F(HQFramerTest, SettingsFrameTrailingJunk) {
   deque<hq::SettingPair> settings = {
-      {hq::SettingId::NUM_PLACEHOLDERS, (SettingValue)3},
       {hq::SettingId::MAX_HEADER_LIST_SIZE, (SettingValue)4},
       // Unknown IDs get ignored, and identifiers of the format
       // "0x1f * N + 0x21" are reserved exactly for this
@@ -567,10 +405,8 @@ TEST_F(HQFramerTest, SettingsFrameTrailingJunk) {
 
   FrameHeader header;
   std::deque<hq::SettingPair> outSettings;
-  parse(HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_SETTINGS,
-        &parseSettings,
-        header,
-        outSettings);
+  parse(
+      HTTP3::ErrorCode::HTTP_FRAME_ERROR, &parseSettings, header, outSettings);
 }
 
 TEST_F(HQFramerTest, SettingsFrameWriteError) {

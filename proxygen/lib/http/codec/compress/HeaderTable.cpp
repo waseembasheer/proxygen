@@ -1,19 +1,14 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/compress/HeaderTable.h>
 
 #include <glog/logging.h>
-
-using std::list;
-using std::pair;
-using std::string;
 
 namespace proxygen {
 
@@ -47,8 +42,8 @@ bool HeaderTable::add(HPACKHeader header) {
   }
 
   if (size_ == length()) {
-    increaseTableLengthTo(std::min((uint32_t)ceil(size_ * 1.5),
-                                   getMaxTableLength(capacity_)));
+    increaseTableLengthTo(
+        std::min((uint32_t)ceil(size_ * 1.5), getMaxTableLength(capacity_)));
   }
   head_ = next(head_);
   // index name
@@ -57,6 +52,7 @@ bool HeaderTable::add(HPACKHeader header) {
   table_[head_] = std::move(header);
 
   ++size_;
+  ++insertCount_;
   return true;
 }
 
@@ -64,8 +60,13 @@ uint32_t HeaderTable::getIndex(const HPACKHeader& header) const {
   return getIndexImpl(header.name, header.value, false);
 }
 
+uint32_t HeaderTable::getIndex(const HPACKHeaderName& name,
+                               folly::StringPiece value) const {
+  return getIndexImpl(name, value, false);
+}
+
 uint32_t HeaderTable::getIndexImpl(const HPACKHeaderName& headerName,
-                                   const folly::fbstring& value,
+                                   folly::StringPiece value,
                                    bool nameOnly) const {
   auto it = names_.find(headerName);
   if (it == names_.end()) {
@@ -86,7 +87,7 @@ bool HeaderTable::hasName(const HPACKHeaderName& headerName) {
 }
 
 uint32_t HeaderTable::nameIndex(const HPACKHeaderName& headerName) const {
-  folly::fbstring value;
+  folly::StringPiece value;
   return getIndexImpl(headerName, value, true /* name only */);
 }
 
@@ -107,7 +108,7 @@ uint32_t HeaderTable::removeLast() {
   // remove the first element from the names index
   auto names_it = names_.find(table_[t].name);
   DCHECK(names_it != names_.end());
-  auto &ilist = names_it->second;
+  auto& ilist = names_it->second;
   DCHECK_EQ(ilist.front(), t);
   ilist.pop_front();
 
@@ -168,8 +169,8 @@ void HeaderTable::increaseTableLengthTo(uint32_t newLength) {
     // of the now-larger table_
     updateResizedTable(oldTail, oldLength, newLength);
     // Update the names indecies that pointed to the old range
-    for (auto& names_it: names_) {
-      for (auto& idx: names_it.second) {
+    for (auto& names_it : names_) {
+      for (auto& idx : names_it.second) {
         if (idx >= oldTail) {
           DCHECK_LT(idx + (length() - oldLength), length());
           idx += (length() - oldLength);
@@ -187,9 +188,11 @@ void HeaderTable::resizeTable(uint32_t newLength) {
   table_.resize(newLength);
 }
 
-void HeaderTable::updateResizedTable(uint32_t oldTail, uint32_t oldLength,
+void HeaderTable::updateResizedTable(uint32_t oldTail,
+                                     uint32_t oldLength,
                                      uint32_t newLength) {
-  std::move_backward(table_.begin() + oldTail, table_.begin() + oldLength,
+  std::move_backward(table_.begin() + oldTail,
+                     table_.begin() + oldLength,
                      table_.begin() + newLength);
 }
 
@@ -225,7 +228,8 @@ uint32_t HeaderTable::toExternal(uint32_t internalIndex) const {
   return toExternal(head_, length(), internalIndex);
 }
 
-uint32_t HeaderTable::toExternal(uint32_t head, uint32_t length,
+uint32_t HeaderTable::toExternal(uint32_t head,
+                                 uint32_t length,
                                  uint32_t internalIndex) {
   return ((head + length - internalIndex) % length) + 1;
 }
@@ -234,7 +238,8 @@ uint32_t HeaderTable::toInternal(uint32_t externalIndex) const {
   return toInternal(head_, length(), externalIndex);
 }
 
-uint32_t HeaderTable::toInternal(uint32_t head, uint32_t length,
+uint32_t HeaderTable::toInternal(uint32_t head,
+                                 uint32_t length,
                                  uint32_t externalIndex) {
   // remove the offset
   --externalIndex;
@@ -255,11 +260,11 @@ std::ostream& operator<<(std::ostream& os, const HeaderTable& table) {
   os << std::endl;
   for (size_t i = 1; i <= table.size(); i++) {
     const HPACKHeader& h = table.getHeader(i);
-    os << '[' << i << "] (s=" << h.bytes() << ") "
-       << h.name << ": " << h.value << std::endl;
+    os << '[' << i << "] (s=" << h.bytes() << ") " << h.name << ": " << h.value
+       << std::endl;
   }
   os << "total size: " << table.bytes() << std::endl;
   return os;
 }
 
-}
+} // namespace proxygen

@@ -1,18 +1,16 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
+#include <proxygen/lib/http/HTTPMessage.h>
 #include <fcntl.h>
 #include <folly/portability/GTest.h>
-#include <proxygen/lib/http/HTTPMessage.h>
 #include <proxygen/lib/utils/TestUtils.h>
 #include <signal.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 
@@ -46,10 +44,10 @@ TEST(HTTPMessage, TestParseCookiesSingleCookie) {
 TEST(HTTPMessage, TestParseCookiesMultipleCookies) {
   HTTPMessage msg;
 
-  msg.getHeaders().add(
-    "Cookie", "id=1256679245; data=0:1234567; same=Always; Name");
-  msg.getHeaders().add(
-    "Cookie", "id2=1256679245; data2=0:1234567; same=Always; ");
+  msg.getHeaders().add("Cookie",
+                       "id=1256679245; data=0:1234567; same=Always; Name");
+  msg.getHeaders().add("Cookie",
+                       "id2=1256679245; data2=0:1234567; same=Always; ");
   EXPECT_EQ(msg.getCookie("id"), "1256679245");
   EXPECT_EQ(msg.getCookie("id2"), "1256679245");
   EXPECT_EQ(msg.getCookie("data"), "0:1234567");
@@ -60,8 +58,9 @@ TEST(HTTPMessage, TestParseCookiesMultipleCookies) {
 
 TEST(HTTPMessage, TestParseQueryParamsSimple) {
   HTTPMessage msg;
-  string url = "/test?seq=123456&userid=1256679245&dup=1&dup=2&helloWorld"
-               "&second=was+it+clear+%28already%29%3F";
+  string url =
+      "/test?seq=123456&userid=1256679245&dup=1&dup=2&helloWorld"
+      "&second=was+it+clear+%28already%29%3F";
 
   msg.setURL(url);
   EXPECT_EQ(msg.getQueryParam("seq"), "123456");
@@ -77,18 +76,23 @@ TEST(HTTPMessage, TestParseQueryParamsSimple) {
   EXPECT_EQ(msg.getIntQueryParam("dup"), 2);
   EXPECT_ANY_THROW(msg.getIntQueryParam("abc"));
   EXPECT_ANY_THROW(msg.getIntQueryParam("second"));
+
+  const auto& param = msg.getQueryParam("seq");
+  msg.setQueryParam("foo", "bar");
+  EXPECT_EQ(param, "123456");
+  msg.removeQueryParam("foo");
+  EXPECT_EQ(param, "123456");
 }
 
 TEST(HTTPMessage, TestParseQueryParamsComplex) {
   HTTPMessage msg;
   std::vector<std::vector<std::string>> input = {
-    {"", "", ""},
-    {"key_and_equal_but_no_value", "=", ""},
-    {"only_key", "", ""},
-    {"key_and_value", "=", "value"},
-    {"key_and_value_2", "=", "value2"},
-    {"key_and_value_3", "=", "value3"}
-  };
+      {"", "", ""},
+      {"key_and_equal_but_no_value", "=", ""},
+      {"only_key", "", ""},
+      {"key_and_value", "=", "value"},
+      {"key_and_value_2", "=", "value2"},
+      {"key_and_value_3", "=", "value3"}};
 
   for (int i = 0; i < (1 << input.size()); ++i) {
     std::vector<std::vector<std::string>> sub;
@@ -102,7 +106,7 @@ TEST(HTTPMessage, TestParseQueryParamsComplex) {
     do {
       bool first = true;
       std::string url = "/test?";
-      for (const auto& val: sub) {
+      for (const auto& val : sub) {
         if (first) {
           first = false;
         } else {
@@ -113,7 +117,7 @@ TEST(HTTPMessage, TestParseQueryParamsComplex) {
       }
 
       msg.setURL(url);
-      for (const auto& val: sub) {
+      for (const auto& val : sub) {
         if (val[0].empty()) {
           continue;
         }
@@ -123,6 +127,15 @@ TEST(HTTPMessage, TestParseQueryParamsComplex) {
 
     } while (next_permutation(sub.begin(), sub.end()));
   }
+}
+
+TEST(HTTPMessage, SetInvalidURL) {
+  HTTPMessage msg;
+
+  msg.setURL("http://www.foooooooooooooooooooo.com/bar");
+  EXPECT_EQ(msg.getPathAsStringPiece(), "/bar");
+  msg.setURL("/\t/?tbtkkukgrenncdlvlgbigerblcgjbkgb=1");
+  EXPECT_EQ(msg.getPathAsStringPiece(), "");
 }
 
 TEST(HTTPMessage, TestHeaderPreservation) {
@@ -212,15 +225,42 @@ TEST(HTTPMessage, TestProxification) {
   HTTPMessage msg;
 
   folly::SocketAddress dstAddr("192.168.1.1", 1887);
-  folly::SocketAddress clientAddr("74.125.127.9", 1987);
   msg.setDstAddress(dstAddr);
   msg.setLocalIp("10.0.0.1");
+
   msg.ensureHostHeader();
   msg.setWantsKeepalive(false);
 
   HTTPHeaders& hdrs = msg.getHeaders();
   EXPECT_EQ("192.168.1.1", hdrs.getSingleOrEmpty(HTTP_HEADER_HOST));
   EXPECT_FALSE(msg.wantsKeepalive());
+}
+
+TEST(HTTPMessage, TestSetClientAddress) {
+  HTTPMessage msg;
+
+  folly::SocketAddress clientAddr("74.125.127.9", 1987);
+  msg.setClientAddress(clientAddr);
+  EXPECT_EQ(msg.getClientIP(), "74.125.127.9");
+  EXPECT_EQ(msg.getClientPort(), "1987");
+  // Now try cached path
+  EXPECT_EQ(msg.getClientIP(), "74.125.127.9");
+  EXPECT_EQ(msg.getClientPort(), "1987");
+
+  // Test updating client address
+  folly::SocketAddress clientAddr2("74.125.127.8", 1988);
+  msg.setClientAddress(clientAddr2);
+  EXPECT_EQ(msg.getClientIP(), "74.125.127.8");
+  EXPECT_EQ(msg.getClientPort(), "1988");
+}
+
+TEST(HTTPMessage, BizarreVersions) {
+  HTTPMessage msg;
+
+  msg.setHTTPVersion(0, 22);
+  EXPECT_EQ(msg.getVersionString(), "0.22");
+  msg.setHTTPVersion(10, 1);
+  EXPECT_EQ(msg.getVersionString(), "10.1");
 }
 
 TEST(HTTPMessage, TestKeepaliveCheck) {
@@ -381,7 +421,9 @@ void testPathAndQuery(const string& url,
   msg.setURL(url);
 
   EXPECT_EQ(msg.getURL(), url);
+  EXPECT_EQ(msg.getPathAsStringPiece(), expectedPath);
   EXPECT_EQ(msg.getPath(), expectedPath);
+  EXPECT_EQ(msg.getQueryStringAsStringPiece(), expectedQuery);
   EXPECT_EQ(msg.getQueryString(), expectedQuery);
 }
 
@@ -391,6 +433,24 @@ TEST(GetPathAndQuery, ParseURL) {
   testPathAndQuery("localhost", "", "");
   testPathAndQuery("/f/o/o?bar#qqq", "/f/o/o", "bar");
   testPathAndQuery("#?hello", "", "");
+}
+
+TEST(HTTPMessage, CheckHeaderForToken) {
+  HTTPMessage msg;
+  std::vector<std::pair<std::string, bool>> tests{{"close", true},
+                                                  {"xclose", false},
+                                                  {"closex", false},
+                                                  {"close, foo", true},
+                                                  {"close, ", true},
+                                                  {"foo, close", true},
+                                                  {", close", true},
+                                                  {"close, close, ", true}};
+
+  for (auto& test : tests) {
+    msg.getHeaders().set(HTTP_HEADER_CONNECTION, test.first);
+    EXPECT_TRUE(msg.checkForHeaderToken(
+                    HTTP_HEADER_CONNECTION, "close", false) == test.second);
+  }
 }
 
 TEST(HTTPHeaders, AddStringPiece) {
@@ -408,9 +468,8 @@ TEST(HTTPHeaders, InitializerList) {
 
   hdrs.add({{"name", "value"}});
   hdrs.add({{HTTP_HEADER_CONNECTION, "close"}});
-  hdrs.add({{"a", "b"},
-            {HTTP_HEADER_CONNECTION, "foo"},
-            {HTTP_HEADER_SERVER, "x"}});
+  hdrs.add(
+      {{"a", "b"}, {HTTP_HEADER_CONNECTION, "foo"}, {HTTP_HEADER_SERVER, "x"}});
 
   EXPECT_EQ("value", hdrs.getSingleOrEmpty("name"));
   EXPECT_EQ("close, foo", hdrs.combine(HTTP_HEADER_CONNECTION));
@@ -439,7 +498,7 @@ void testRemoveQueryParam(const string& url,
   EXPECT_EQ(msg.removeQueryParam(queryParam), expectedChange);
 
   EXPECT_EQ(msg.getURL(), expectedUrl);
-  EXPECT_EQ(msg.getQueryString(), expectedQuery);
+  EXPECT_EQ(msg.getQueryStringAsStringPiece(), expectedQuery);
 }
 
 TEST(HTTPMessage, RemoveQueryParamTests) {
@@ -476,7 +535,7 @@ void testSetQueryParam(const string& url,
   EXPECT_EQ(msg.setQueryParam(queryParam, paramValue), expectedChange);
 
   EXPECT_EQ(msg.getURL(), expectedUrl);
-  EXPECT_EQ(msg.getQueryString(), expectedQuery);
+  EXPECT_EQ(msg.getQueryStringAsStringPiece(), expectedQuery);
 }
 
 TEST(HTTPMessage, SetQueryParamTests) {
@@ -511,27 +570,27 @@ TEST(HTTPMessage, TestCheckForHeaderToken) {
   HTTPHeaders& headers = msg.getHeaders();
 
   headers.add(HTTP_HEADER_CONNECTION, "HTTP2-Settings");
-  EXPECT_TRUE(msg.checkForHeaderToken(HTTP_HEADER_CONNECTION, "HTTP2-Settings",
-                                      false));
-  EXPECT_FALSE(msg.checkForHeaderToken(HTTP_HEADER_CONNECTION, "http2-settings",
-                                       true));
+  EXPECT_TRUE(
+      msg.checkForHeaderToken(HTTP_HEADER_CONNECTION, "HTTP2-Settings", false));
+  EXPECT_FALSE(
+      msg.checkForHeaderToken(HTTP_HEADER_CONNECTION, "http2-settings", true));
 }
 
-TEST(HttpMessage, TestProtocolStringHTTPVersion) {
+TEST(HTTPMessage, TestProtocolStringHTTPVersion) {
   HTTPMessage msg;
   msg.setHTTPVersion(1, 1);
 
   EXPECT_EQ(msg.getProtocolString(), "1.1");
 }
 
-TEST(HttpMessage, TestProtocolStringAdvancedProtocol) {
+TEST(HTTPMessage, TestProtocolStringAdvancedProtocol) {
   HTTPMessage msg;
   std::string advancedProtocol = "h2";
   msg.setAdvancedProtocolString(advancedProtocol);
   EXPECT_EQ(msg.getProtocolString(), advancedProtocol);
 }
 
-TEST(HttpMessage, TestExtractTrailers) {
+TEST(HTTPMessage, TestExtractTrailers) {
   HTTPMessage msg;
   auto trailers = std::make_unique<HTTPHeaders>();
   HTTPHeaders* rawPointer = trailers.get();
@@ -540,4 +599,136 @@ TEST(HttpMessage, TestExtractTrailers) {
   auto trailers2 = msg.extractTrailers();
   EXPECT_EQ(rawPointer, trailers2.get());
   EXPECT_EQ(nullptr, msg.getTrailers());
+}
+
+TEST(HTTPMessage, TestMoveCopy) {
+  HTTPMessage m1;
+  m1.setURL(std::string(32, 'a'));
+  HTTPMessage m2;
+  m2.setURL(std::string(32, 'b'));
+  m2 = m1;
+  m2 = std::move(m1);
+}
+
+namespace {
+const size_t kInitialVectorReserve = 16;
+}
+
+TEST(HTTPHeaders, GrowTest) {
+  HTTPHeaders headers;
+  for (size_t i = 0; i < kInitialVectorReserve * 2; i++) {
+    headers.add(folly::to<std::string>(i), std::string(50, 'a' + i));
+  }
+  EXPECT_EQ(headers.getSingleOrEmpty("0")[0], 'a');
+  EXPECT_EQ(headers.getSingleOrEmpty("25")[0], 'z');
+}
+
+TEST(HTTPHeaders, ClearTest) {
+  HTTPHeaders headers;
+  for (size_t i = 0; i < kInitialVectorReserve * 2; i++) {
+    headers.add(folly::to<std::string>(i), std::string(50, 'a' + i));
+  }
+  EXPECT_EQ(headers.getSingleOrEmpty("25")[0], 'z');
+  headers.removeAll();
+  EXPECT_EQ(headers.size(), 0);
+  for (size_t i = 0; i < kInitialVectorReserve * 2; i++) {
+    headers.add(folly::to<std::string>(i), std::string(50, 'A' + i));
+  }
+  EXPECT_EQ(headers.getSingleOrEmpty("25")[0], 'Z');
+}
+
+void copyAndMoveTest(size_t multiplier) {
+  HTTPHeaders headers;
+  for (size_t i = 0; i < kInitialVectorReserve * multiplier; i++) {
+    headers.add(folly::to<std::string>(i), std::string(50, 'a' + i));
+  }
+  HTTPHeaders headers2(headers);
+  EXPECT_EQ(headers2.getSingleOrEmpty("3")[0], 'd');
+  HTTPHeaders headers3;
+  headers3.add("blown", "away");
+  headers3 = headers2;
+  EXPECT_EQ(headers2.getSingleOrEmpty("4")[0], 'e');
+  HTTPHeaders headers4(std::move(headers3));
+  EXPECT_EQ(headers4.getSingleOrEmpty("5")[0], 'f');
+  HTTPHeaders headers5;
+  headers5.add("blown", "away");
+  headers5 = std::move(headers4);
+  EXPECT_EQ(headers5.getSingleOrEmpty("6")[0], 'g');
+}
+
+TEST(HTTPHeaders, CopyAndMoveTest) {
+  copyAndMoveTest(1);
+  copyAndMoveTest(2);
+  copyAndMoveTest(3);
+}
+
+void checkPrettyPrint(const HTTPHeaders& h) {
+  EXPECT_EQ(h.size(), 2);
+}
+
+TEST(HTTPHeaders, PrettyPrint) {
+  HTTPHeaders headers;
+  headers.add(HTTP_HEADER_HOST, "www.facebook.com");
+  headers.add(HTTP_HEADER_CONNECTION, "close");
+  headers.add("Foo", "Bar");
+  headers.remove(HTTP_HEADER_CONNECTION);
+  checkPrettyPrint(headers);
+}
+
+void checkPrettyPrintMsg(const HTTPMessage& m) {
+  EXPECT_EQ(m.getMethodString(), "SPECIAL");
+}
+
+TEST(HTTPMessage, PrettyPrint) {
+  HTTPMessage request;
+  request.setURL("/foo/bar.php?n=v");
+  request.setHTTPVersion(1, 1);
+  request.setMethod("SPECIAL");
+  request.setIsChunked(true);
+  folly::SocketAddress addr;
+  addr.setFromHostPort("localhost", 9999);
+  request.setClientAddress(addr);
+  request.getClientIP();
+  request.getClientPort();
+  request.getHeaders().add(HTTP_HEADER_HOST, "www.intstagram.com");
+  request.getHeaders().add("Bar", "Foo");
+  checkPrettyPrintMsg(request);
+
+  HTTPMessage response;
+  response.setStatusCode(418);
+  response.setStatusMessage("I am a teapot");
+  response.setHTTPVersion(3, 0);
+  response.getHeaders().add(HTTP_HEADER_CONTENT_LENGTH, "0");
+  response.getHeaders().add(HTTP_HEADER_CONTENT_TYPE, "text/plain");
+  checkPrettyPrint(response.getHeaders());
+}
+
+TEST(HTTPHeaders, GetSetOnResize) {
+  HTTPHeaders headers;
+  for (size_t i = 0; i < kInitialVectorReserve - 1; i++) {
+    headers.add(HTTP_HEADER_CONNECTION, "token");
+  }
+  std::string value(32, 'a');
+  headers.add(HTTP_HEADER_SERVER, value);
+  EXPECT_EQ(headers.size(), kInitialVectorReserve);
+  auto& v = headers.getSingleOrEmpty(HTTP_HEADER_SERVER);
+  headers.set(HTTP_HEADER_SERVER, v);
+
+  EXPECT_EQ(headers.getSingleOrEmpty(HTTP_HEADER_SERVER), value);
+}
+
+TEST(HTTPHeaders, MoveFromTest) {
+  HTTPHeaders h1;
+  HTTPHeaders h2(std::move(h1));
+  EXPECT_FALSE(h1.exists(HTTP_HEADER_CONNECTION));
+  h1.forEachValueOfHeader(HTTP_HEADER_HOST, [](const std::string&) {
+    CHECK(false) << "Unreachable";
+    return false;
+  });
+  h1.add(HTTP_HEADER_CONNECTION, "close");
+
+  HTTPHeaders h3;
+  h3 = std::move(h1); // move assignment
+  EXPECT_EQ(h1.size(), 0);
+  EXPECT_EQ(h3.size(), 1);
 }

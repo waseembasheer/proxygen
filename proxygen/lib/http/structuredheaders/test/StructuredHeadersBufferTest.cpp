@@ -1,22 +1,20 @@
 /*
- *  Copyright (c) 2004-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/structuredheaders/StructuredHeadersBuffer.h>
-#include <string>
+#include <folly/Conv.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/structuredheaders/StructuredHeadersConstants.h>
-#include <proxygen/lib/utils/Base64.h>
+#include <string>
 
-namespace proxygen{
+namespace proxygen {
 
-class StructuredHeadersBufferTest : public testing::Test {
-};
+class StructuredHeadersBufferTest : public testing::Test {};
 
 TEST_F(StructuredHeadersBufferTest, TestBinaryContent) {
   std::string input = "*bWF4aW0gaXMgdGhlIGJlc3Q=*";
@@ -215,6 +213,49 @@ TEST_F(StructuredHeadersBufferTest, TestIntegerUnderflow) {
   EXPECT_NE(err, StructuredHeaders::DecodeError::OK);
 }
 
+TEST_F(StructuredHeadersBufferTest, TestBool) {
+  for (auto i = 0; i < 2; i++) {
+    std::string input = folly::to<std::string>("?", i);
+    StructuredHeadersBuffer shd(input);
+    StructuredHeaderItem output;
+    auto err = shd.parseItem(output);
+    EXPECT_EQ(err, StructuredHeaders::DecodeError::OK);
+    EXPECT_EQ(output.tag, StructuredHeaderItem::Type::BOOLEAN);
+    bool expected = i;
+    EXPECT_EQ(output.get<bool>(), expected);
+  }
+}
+
+TEST_F(StructuredHeadersBufferTest, TestBoolInvalidChars) {
+  std::string input = "?2";
+  StructuredHeadersBuffer shd(input);
+  StructuredHeaderItem output;
+  auto err = shd.parseItem(output);
+  EXPECT_EQ(err, StructuredHeaders::DecodeError::INVALID_CHARACTER);
+}
+
+TEST_F(StructuredHeadersBufferTest, TestBoolWrongLength) {
+  std::vector<std::string> inputs{"?", "?10"};
+  for (auto& input : inputs) {
+    StructuredHeadersBuffer shd(input);
+    StructuredHeaderItem output;
+    auto err = shd.parseItem(output);
+    EXPECT_EQ(err,
+              (input.length() > 2
+                   ? StructuredHeaders::DecodeError::VALUE_TOO_LONG
+                   : StructuredHeaders::DecodeError::UNEXPECTED_END_OF_BUFFER));
+  }
+}
+
+TEST_F(StructuredHeadersBufferTest, TestBool2) {
+
+  std::string input = "?2";
+  StructuredHeadersBuffer shd(input);
+  StructuredHeaderItem output;
+  auto err = shd.parseItem(output);
+  EXPECT_EQ(err, StructuredHeaders::DecodeError::INVALID_CHARACTER);
+}
+
 TEST_F(StructuredHeadersBufferTest, TestFloat) {
   std::string input = "3.1415926536";
   StructuredHeadersBuffer shd(input);
@@ -326,4 +367,4 @@ TEST_F(StructuredHeadersBufferTest, TestInequalityOperator) {
   EXPECT_NE(stringItem, std::string("bye"));
 }
 
-}
+} // namespace proxygen

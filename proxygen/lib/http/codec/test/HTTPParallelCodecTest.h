@@ -1,24 +1,23 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 #include <folly/portability/GTest.h>
-#include <proxygen/lib/utils/Logging.h>
-#include <proxygen/lib/http/codec/test/TestUtils.h>
 #include <proxygen/lib/http/codec/HTTPParallelCodec.h>
+#include <proxygen/lib/http/codec/test/TestUtils.h>
+#include <proxygen/lib/utils/Logging.h>
 
 class HTTPParallelCodecTest : public testing::Test {
  public:
   HTTPParallelCodecTest(proxygen::HTTPParallelCodec& upstreamCodec,
                         proxygen::HTTPParallelCodec& downstreamCodec)
-    : upstreamCodec_(upstreamCodec),
-    downstreamCodec_(downstreamCodec) {}
+      : upstreamCodec_(upstreamCodec), downstreamCodec_(downstreamCodec) {
+  }
 
   void SetUp() override {
     downstreamCodec_.setCallback(&callbacks_);
@@ -35,12 +34,12 @@ class HTTPParallelCodecTest : public testing::Test {
   }
 
   bool parse(std::function<void(folly::IOBuf*)> hackIngress =
-             std::function<void(folly::IOBuf*)>()) {
+                 std::function<void(folly::IOBuf*)>()) {
     return parseImpl(downstreamCodec_, hackIngress);
   }
 
   bool parseUpstream(std::function<void(folly::IOBuf*)> hackIngress =
-                     std::function<void(folly::IOBuf*)>()) {
+                         std::function<void(folly::IOBuf*)>()) {
     return parseImpl(upstreamCodec_, hackIngress);
   }
 
@@ -65,7 +64,7 @@ class HTTPParallelCodecTest : public testing::Test {
    * allowing debugging individual frames.
    * @note: assign true to dump_ to turn on dumpToFile
    */
-  void dumpToFile(bool isUpstream=false) {
+  void dumpToFile(bool isUpstream = false) {
     if (!dump_) {
       return;
     }
@@ -80,7 +79,7 @@ class HTTPParallelCodecTest : public testing::Test {
   proxygen::HTTPParallelCodec& upstreamCodec_;
   proxygen::HTTPParallelCodec& downstreamCodec_;
   folly::IOBufQueue output_{folly::IOBufQueue::cacheChainLength()};
-  const testing::TestInfo*
-    testInfo_{testing::UnitTest::GetInstance()->current_test_info()};
+  const testing::TestInfo* testInfo_{
+      testing::UnitTest::GetInstance()->current_test_info()};
   bool dump_{false};
 };

@@ -1,15 +1,14 @@
-# Copyright (c) 2019-present, Facebook, Inc.
+# Copyright (c) Facebook, Inc. and its affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree. An additional grant
-# of patent rights can be found in the PATENTS file in the same directory.
+# LICENSE file in the root directory of this source tree.
 
 if(NOT BUILD_TESTS)
     return()
 endif()
 
-add_library(testtransport STATIC TestAsyncTransport.cpp)
+add_library(testtransport TestAsyncTransport.cpp)
 target_include_directories(
     testtransport PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -21,9 +20,8 @@ target_compile_options(
     ${_PROXYGEN_COMMON_COMPILE_OPTIONS}
 )
 target_link_libraries(testtransport PUBLIC proxygen)
-add_dependencies(testtransport googletest)
 
-add_library(testmain STATIC TestMain.cpp)
+add_library(testmain TestMain.cpp)
 target_include_directories(
     testmain PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -35,4 +33,3 @@ target_compile_options(
     testmain PRIVATE
     ${_PROXYGEN_COMMON_COMPILE_OPTIONS}
 )
-add_dependencies(testmain googletest)

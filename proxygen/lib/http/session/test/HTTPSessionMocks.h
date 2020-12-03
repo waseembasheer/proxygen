@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/portability/GMock.h>
@@ -210,6 +209,8 @@ class MockHTTPHandler
 
   GMOCK_NOEXCEPT_METHOD1(onBodyRejected, void(uint64_t));
 
+  GMOCK_NOEXCEPT_METHOD1(traceEventAvailable, void(TraceEvent));
+
   void expectTransaction(std::function<void(HTTPTransaction* txn)> callback) {
     EXPECT_CALL(*this, setTransaction(testing::_))
         .WillOnce(testing::Invoke(callback))
@@ -221,9 +222,13 @@ class MockHTTPHandler
         .WillOnce(testing::SaveArg<0>(pTxn ? pTxn : &txn_));
   }
 
-  void expectPushedTransaction(HTTPTransaction** pTxn = nullptr) {
+  void expectPushedTransaction(HTTPTransactionHandler* handler = nullptr) {
     EXPECT_CALL(*this, onPushedTransaction(testing::_))
-        .WillOnce(testing::SaveArg<0>(pTxn ? pTxn : &pushedTxn_));
+        .WillOnce(testing::Invoke([handler](HTTPTransaction* txn) {
+          if (handler) {
+            txn->setHandler(handler);
+          }
+        }));
   }
 
   void expectHeaders(std::function<void()> callback = std::function<void()>()) {
@@ -412,6 +417,8 @@ class MockController : public HTTPSessionController {
   MOCK_METHOD1(attachSession, void(HTTPSessionBase*));
   MOCK_METHOD1(detachSession, void(const HTTPSessionBase*));
   MOCK_METHOD1(onSessionCodecChange, void(HTTPSessionBase*));
+  MOCK_METHOD1(onTransportReady, void(HTTPSessionBase*));
+
   MOCK_CONST_METHOD0(getGracefulShutdownTimeout, std::chrono::milliseconds());
 
   MOCK_CONST_METHOD0(getHeaderIndexingStrategy,
@@ -445,6 +452,10 @@ class MockHTTPSessionInfoCallback : public HTTPSession::InfoCallback {
   MOCK_METHOD2(onIngressError, void(const HTTPSessionBase&, ProxygenError));
   MOCK_METHOD0(onIngressEOF, void());
   MOCK_METHOD2(onRead, void(const HTTPSessionBase&, size_t));
+  MOCK_METHOD3(onRead,
+               void(const HTTPSessionBase&,
+                    size_t,
+                    folly::Optional<HTTPCodec::StreamID>));
   MOCK_METHOD2(onWrite, void(const HTTPSessionBase&, size_t));
   MOCK_METHOD1(onRequestBegin, void(const HTTPSessionBase&));
   MOCK_METHOD2(onRequestEnd, void(const HTTPSessionBase&, uint32_t));
@@ -477,15 +488,14 @@ class DummyHTTPSessionStats : public HTTPSessionStats {
   void recordTransactionStalled() noexcept override{};
   void recordSessionStalled() noexcept override{};
 
+  void recordPresendIOSplit() noexcept override{};
+  void recordPresendExceedLimit() noexcept override{};
   void recordTTLBAExceedLimit() noexcept override{};
-  void recordTTLBAIOBSplitByEom() noexcept override{};
   void recordTTLBANotFound() noexcept override{};
   void recordTTLBAReceived() noexcept override{};
   void recordTTLBATimeout() noexcept override{};
-  void recordTTLBAEomPassed() noexcept override{};
   void recordTTLBATracked() noexcept override{};
   void recordTTBTXExceedLimit() noexcept override{};
-  void recordTTBTXIOBSplitBySom() noexcept override{};
   void recordTTBTXReceived() noexcept override{};
   void recordTTBTXTimeout() noexcept override{};
   void recordTTBTXNotFound() noexcept override{};

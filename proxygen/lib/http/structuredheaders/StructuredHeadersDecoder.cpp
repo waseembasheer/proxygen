@@ -1,11 +1,9 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 #include "StructuredHeadersDecoder.h"
@@ -14,18 +12,18 @@ namespace proxygen {
 
 using namespace StructuredHeaders;
 
-DecodeError StructuredHeadersDecoder::decodeItem(
-  StructuredHeaderItem& result) {
-    auto err = buf_.parseItem(result);
-    if (err != DecodeError::OK) {
-      return err;
-    }
-    return buf_.isEmpty() ?
-      DecodeError::OK : buf_.handleDecodeError(DecodeError::INVALID_CHARACTER);
+DecodeError StructuredHeadersDecoder::decodeItem(StructuredHeaderItem& result) {
+  auto err = buf_.parseItem(result);
+  if (err != DecodeError::OK) {
+    return err;
+  }
+  return buf_.isEmpty()
+             ? DecodeError::OK
+             : buf_.handleDecodeError(DecodeError::INVALID_CHARACTER);
 }
 
 DecodeError StructuredHeadersDecoder::decodeList(
-   std::vector<StructuredHeaderItem>& result) {
+    std::vector<StructuredHeaderItem>& result) {
 
   while (!buf_.isEmpty()) {
 
@@ -63,7 +61,7 @@ DecodeError StructuredHeadersDecoder::decodeDictionary(Dictionary& result) {
 }
 
 DecodeError StructuredHeadersDecoder::decodeParameterisedList(
-  ParameterisedList& result) {
+    ParameterisedList& result) {
 
   while (!buf_.isEmpty()) {
 
@@ -95,15 +93,14 @@ DecodeError StructuredHeadersDecoder::decodeParameterisedList(
     }
 
     buf_.removeOptionalWhitespace();
-
   }
 
   return buf_.handleDecodeError(DecodeError::UNEXPECTED_END_OF_BUFFER);
 }
 
 DecodeError StructuredHeadersDecoder::decodeMap(
-  std::unordered_map<std::string, StructuredHeaderItem>& result,
-  MapType mapType) {
+    std::unordered_map<std::string, StructuredHeaderItem>& result,
+    MapType mapType) {
 
   std::string delimiter = (mapType == MapType::PARAMETERISED_MAP) ? ";" : ",";
 
@@ -130,13 +127,10 @@ DecodeError StructuredHeadersDecoder::decodeMap(
 
     err = buf_.removeSymbol("=", mapType == MapType::DICTIONARY);
     if (err != DecodeError::OK) {
-      if (mapType == MapType::DICTIONARY) {
-        return err;
-      } else {
-        StructuredHeaderItem value;
-        value.tag = StructuredHeaderItem::Type::NONE;
-        result[thisKey] = value;
-      }
+      StructuredHeaderItem value;
+      value.tag = StructuredHeaderItem::Type::BOOLEAN;
+      value.value = true;
+      result[thisKey] = value;
     } else {
       StructuredHeaderItem value;
       err = buf_.parseItem(value);
@@ -164,7 +158,6 @@ DecodeError StructuredHeadersDecoder::decodeMap(
   }
 
   return buf_.handleDecodeError(DecodeError::UNEXPECTED_END_OF_BUFFER);
-
 }
 
-}
+} // namespace proxygen

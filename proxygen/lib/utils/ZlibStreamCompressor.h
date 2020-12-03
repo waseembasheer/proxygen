@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/portability/GFlags.h>
@@ -29,23 +28,28 @@ class ZlibStreamCompressor : public StreamCompressor {
 
   ~ZlibStreamCompressor();
 
-  void init(CompressionType type, int level);
+  void init();
 
   std::unique_ptr<folly::IOBuf> compress(const folly::IOBuf* in,
                                          bool trailer = true) override;
 
-  int getStatus() { return status_; }
+  int getStatus() {
+    return status_;
+  }
 
   bool hasError() override {
     return status_ != Z_OK && status_ != Z_STREAM_END;
   }
 
-  bool finished() { return status_ == Z_STREAM_END; }
+  bool finished() {
+    return status_ == Z_STREAM_END;
+  }
 
  private:
   CompressionType type_{CompressionType::NONE};
   int level_{Z_DEFAULT_COMPRESSION};
   z_stream zlibStream_;
-  int status_{-1};
+  int status_{Z_OK};
+  bool init_{false};
 };
-}
+} // namespace proxygen

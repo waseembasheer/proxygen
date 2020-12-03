@@ -1,15 +1,12 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
-#include <proxygen/lib/http/Window.h>
 
-#include <folly/portability/GFlags.h>
+#include <proxygen/lib/http/Window.h>
 
 #include <glog/logging.h>
 #include <limits>
@@ -44,8 +41,8 @@ bool Window::reserve(const uint32_t amount, bool strict) {
             << "Attempted decrement of " << amount;
     return false;
   }
-  const int32_t limit = std::numeric_limits<int32_t>::max() -
-    static_cast<int32_t>(amount);
+  const int32_t limit =
+      std::numeric_limits<int32_t>::max() - static_cast<int32_t>(amount);
   if (outstanding_ > 0 && limit < outstanding_) {
     VLOG(3) << "Overflow detected. Window change failed.";
     return false;
@@ -66,8 +63,8 @@ bool Window::free(const uint32_t amount) {
             << "Attempted increment of " << amount;
     return false;
   }
-  const int32_t limit = std::numeric_limits<int32_t>::min() +
-    static_cast<int32_t>(amount);
+  const int32_t limit =
+      std::numeric_limits<int32_t>::min() + static_cast<int32_t>(amount);
   if (outstanding_ < 0 && limit > outstanding_) {
     VLOG(3) << "Underflow detected. Window change failed.";
     return false;
@@ -100,4 +97,4 @@ bool Window::setCapacity(const uint32_t capacity) {
   return true;
 }
 
-}
+} // namespace proxygen

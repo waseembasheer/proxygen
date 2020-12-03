@@ -1,17 +1,16 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include "proxygen/lib/http/codec/compress/experimental/simulator/CompressionSimulator.h"
 #include "proxygen/lib/http/codec/compress/experimental/simulator/CompressionUtils.h"
 #include "proxygen/lib/http/codec/compress/experimental/simulator/HPACKScheme.h"
-#include "proxygen/lib/http/codec/compress/experimental/simulator/QPACKScheme.h"
 #include "proxygen/lib/http/codec/compress/experimental/simulator/QMINScheme.h"
+#include "proxygen/lib/http/codec/compress/experimental/simulator/QPACKScheme.h"
 
 #include <proxygen/lib/http/codec/compress/test/HTTPArchive.h>
 #include <proxygen/lib/utils/TestUtils.h>
@@ -19,10 +18,8 @@
 
 using namespace std;
 using namespace folly;
-using namespace proxygen;
 
 namespace {
-using namespace proxygen::compress;
 
 // This needs to be synchronized with HPACKEncoder::kAutoFlushThreshold.
 const size_t kMTU = 1400;
@@ -138,11 +135,11 @@ void CompressionSimulator::setupRequest(uint16_t index,
                                         HTTPMessage&& msg,
                                         std::chrono::milliseconds encodeDelay) {
   // Normalize to relative paths
-  const auto& query = msg.getQueryString();
+  auto query = msg.getQueryStringAsStringPiece();
   if (query.empty()) {
-    msg.setURL(msg.getPath());
+    msg.setURL(msg.getPathAsStringPiece());
   } else {
-    msg.setURL(folly::to<string>(msg.getPath(), "?", query));
+    msg.setURL(folly::to<string>(msg.getPathAsStringPiece(), "?", query));
   }
 
   auto scheme = getScheme(msg.getHeaders().getSingleOrEmpty(HTTP_HEADER_HOST));
@@ -272,8 +269,8 @@ CompressionScheme* CompressionSimulator::getScheme(StringPiece domain) {
 unique_ptr<CompressionScheme> CompressionSimulator::makeScheme() {
   switch (params_.type) {
     case SchemeType::QPACK:
-      return make_unique<QPACKScheme>(this, params_.tableSize,
-                                      params_.maxBlocking);
+      return make_unique<QPACKScheme>(
+          this, params_.tableSize, params_.maxBlocking);
     case SchemeType::QMIN:
       return make_unique<QMINScheme>(this, params_.tableSize);
     case SchemeType::HPACK:
@@ -288,8 +285,8 @@ std::pair<FrameFlags, unique_ptr<IOBuf>> CompressionSimulator::encode(
   VLOG(1) << "Start encoding request=" << index;
   // vector to hold cookie crumbs
   vector<string> cookies;
-  vector<compress::Header> allHeaders = prepareMessageForCompression(
-      requests_[index], cookies);
+  vector<compress::Header> allHeaders =
+      prepareMessageForCompression(requests_[index], cookies);
 
   auto before = stats_.uncompressed;
   auto res = scheme->encode(newPacket, std::move(allHeaders), stats_);

@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/utils/Base64.h>
 
 #include <glog/logging.h>
@@ -18,10 +17,12 @@
 namespace {
 struct BIODeleter {
  public:
-  void operator()(BIO* bio) const { BIO_free_all(bio); };
+  void operator()(BIO* bio) const {
+    BIO_free_all(bio);
+  };
 };
 
-}
+} // namespace
 
 namespace proxygen {
 
@@ -34,16 +35,17 @@ std::string Base64::urlDecode(const std::string& urlB64message) {
   }
 
   std::string b64message(urlB64message.length() + padding, 0);
-  std::transform(
-    urlB64message.begin(), urlB64message.end(), b64message.begin(),
-    [](char c) {
-      if (c == '-') {
-        return '+';
-      } else if (c == '_') {
-        return '/';
-      }
-      return c;
-    });
+  std::transform(urlB64message.begin(),
+                 urlB64message.end(),
+                 b64message.begin(),
+                 [](char c) {
+                   if (c == '-') {
+                     return '+';
+                   } else if (c == '_') {
+                     return '/';
+                   }
+                   return c;
+                 });
   for (auto i = urlB64message.length(); i < urlB64message.length() + padding;
        i++) {
     b64message[i] = '=';
@@ -57,7 +59,7 @@ std::string Base64::decode(const std::string& b64message, int padding) {
   }
 
   std::unique_ptr<BIO, BIODeleter> bio, b64;
-  size_t decodeLen = b64message.length() * 3/4 - padding;
+  size_t decodeLen = b64message.length() * 3 / 4 - padding;
   std::string result(decodeLen, '\0');
 
   bio.reset(BIO_new_mem_buf((void*)b64message.data(), -1));
@@ -109,21 +111,19 @@ std::string Base64::urlEncode(folly::ByteRange buffer) {
   std::string result = encode(buffer);
   folly::StringPiece sp(result.data(), result.length());
   uint8_t padding = 0;
-  std::transform(
-    sp.begin(), sp.end(), result.begin(),
-    [&padding](char c) {
-      if (c == '+') {
-        return '-';
-      } else if (c == '/') {
-        return '_';
-      } else if (c == '=') {
-        padding++;
-      }
-      return c;
-    });
+  std::transform(sp.begin(), sp.end(), result.begin(), [&padding](char c) {
+    if (c == '+') {
+      return '-';
+    } else if (c == '/') {
+      return '_';
+    } else if (c == '=') {
+      padding++;
+    }
+    return c;
+  });
   DCHECK_LE(padding, result.length());
   result.resize(result.length() - padding);
   return result;
 }
 
-}
+} // namespace proxygen

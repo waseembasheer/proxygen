@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <chrono>
@@ -37,8 +36,9 @@ namespace proxygen {
  * Note, this class may not be needed given libevent's
  * event_base_init_common_timeout(). We should look into using that.
  */
-class AsyncTimeoutSet : private folly::AsyncTimeout,
-                        public folly::DelayedDestruction {
+class AsyncTimeoutSet
+    : private folly::AsyncTimeout
+    , public folly::DelayedDestruction {
  public:
   using UniquePtr = std::unique_ptr<AsyncTimeoutSet, Destructor>;
 
@@ -53,7 +53,8 @@ class AsyncTimeoutSet : private folly::AsyncTimeout,
    */
   class Callback {
    public:
-    Callback() {}
+    Callback() {
+    }
 
     virtual ~Callback();
 
@@ -85,7 +86,7 @@ class AsyncTimeoutSet : private folly::AsyncTimeout,
    private:
     // Get the time remaining until this timeout expires
     std::chrono::milliseconds getTimeRemaining(
-      std::chrono::milliseconds now) const {
+        std::chrono::milliseconds now) const {
       if (now >= expiration_) {
         return std::chrono::milliseconds(0);
       }
@@ -113,9 +114,11 @@ class AsyncTimeoutSet : private folly::AsyncTimeout,
    */
   class TimeoutClock {
    public:
-    TimeoutClock() {}
+    TimeoutClock() {
+    }
 
-    virtual ~TimeoutClock() {}
+    virtual ~TimeoutClock() {
+    }
 
     virtual std::chrono::milliseconds millisecondsSinceEpoch() = 0;
   };
@@ -125,22 +128,22 @@ class AsyncTimeoutSet : private folly::AsyncTimeout,
    *
    * If timeout clock is unspecified, it will use the default (system clock)
    */
-  AsyncTimeoutSet(folly::TimeoutManager* timeoutManager,
-                  std::chrono::milliseconds intervalMS,
-                  std::chrono::milliseconds atMostEveryN =
-                      std::chrono::milliseconds(0),
-                  TimeoutClock* timeoutClock = nullptr);
+  AsyncTimeoutSet(
+      folly::TimeoutManager* timeoutManager,
+      std::chrono::milliseconds intervalMS,
+      std::chrono::milliseconds atMostEveryN = std::chrono::milliseconds(0),
+      TimeoutClock* timeoutClock = nullptr);
 
   /**
    * Create a new AsyncTimeoutSet with the given 'internal' settting. For
    * details on what the InternalEnum specifies, see the documentation in
    * AsyncTimeout.h
    */
-  AsyncTimeoutSet(folly::TimeoutManager* timeoutManager,
-                  InternalEnum internal,
-                  std::chrono::milliseconds intervalMS,
-                  std::chrono::milliseconds atMostEveryN =
-                      std::chrono::milliseconds(0));
+  AsyncTimeoutSet(
+      folly::TimeoutManager* timeoutManager,
+      InternalEnum internal,
+      std::chrono::milliseconds intervalMS,
+      std::chrono::milliseconds atMostEveryN = std::chrono::milliseconds(0));
 
   /**
    * Destroy the AsyncTimeoutSet.
@@ -183,8 +186,12 @@ class AsyncTimeoutSet : private folly::AsyncTimeout,
   /**
    * Get a pointer to the next Callback scheduled to be invoked (may be null).
    */
-  Callback* front() { return head_; }
-  const Callback* front() const { return head_; }
+  Callback* front() {
+    return head_;
+  }
+  const Callback* front() const {
+    return head_;
+  }
 
  protected:
   /**
@@ -197,8 +204,8 @@ class AsyncTimeoutSet : private folly::AsyncTimeout,
 
  private:
   // Forbidden copy constructor and assignment operator
-  AsyncTimeoutSet(AsyncTimeoutSet const &) = delete;
-  AsyncTimeoutSet& operator=(AsyncTimeoutSet const &) = delete;
+  AsyncTimeoutSet(AsyncTimeoutSet const&) = delete;
+  AsyncTimeoutSet& operator=(AsyncTimeoutSet const&) = delete;
 
   // Private methods to be invoked by AsyncTimeoutSet::Callback
   void headChanged();
@@ -214,4 +221,4 @@ class AsyncTimeoutSet : private folly::AsyncTimeout,
   bool inTimeoutExpired_{false};
 };
 
-} // proxygen
+} // namespace proxygen

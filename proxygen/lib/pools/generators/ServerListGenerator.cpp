@@ -1,55 +1,19 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include "proxygen/lib/pools/generators/ServerListGenerator.h"
 
 #include <folly/Conv.h>
 #include <folly/io/async/EventBase.h>
 
 using folly::EventBase;
-using proxygen::ServerListGenerator;
 using std::vector;
 using std::chrono::milliseconds;
-
-namespace {
-
-class ServerListCallback : public ServerListGenerator::Callback {
- public:
-  enum StatusEnum {
-    NOT_FINISHED,
-    SUCCESS,
-    ERROR,
-    CANCELLED,
-  };
-
-  explicit ServerListCallback() : status(NOT_FINISHED) {
-  }
-
-  void onServerListAvailable(
-      vector<ServerListGenerator::ServerConfig>&& results) noexcept override {
-    servers.swap(results);
-    status = SUCCESS;
-  }
-  void onServerListError(std::exception_ptr error) noexcept override {
-    errorPtr = error;
-    status = ERROR;
-  }
-  virtual void serverListRequestCancelled() {
-    status = CANCELLED;
-  }
-
-  StatusEnum status;
-  vector<ServerListGenerator::ServerConfig> servers;
-  std::exception_ptr errorPtr;
-};
-
-} // unnamed namespace
 
 namespace proxygen {
 

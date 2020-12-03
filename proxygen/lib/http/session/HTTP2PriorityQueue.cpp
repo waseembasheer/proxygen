@@ -1,18 +1,27 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/session/HTTP2PriorityQueue.h>
 
 using std::list;
 using std::unique_ptr;
 
 namespace proxygen {
+
+HTTP2PriorityQueue::Node* HTTP2PriorityQueue::nodeFromBaseNode(
+    HTTP2PriorityQueue::BaseNode* bnode) {
+  return
+#if DEBUG
+      CHECK_NOTNULL(dynamic_cast<HTTP2PriorityQueue::Node*>(bnode));
+#else
+      static_cast<HTTP2PriorityQueue::Node*>(bnode);
+#endif
+}
 
 uint32_t HTTP2PriorityQueue::kMaxRebuilds_ = 3;
 std::chrono::milliseconds HTTP2PriorityQueue::kNodeLifetime_ =
@@ -28,15 +37,15 @@ HTTP2PriorityQueue::Node::Node(HTTP2PriorityQueue& queue,
       id_(id),
       weight_(weight + 1),
       txn_(txn) {
-  DCHECK(queue_.nodes_.find(id_, IdHash(), IdNodeEqual()) ==
-         queue_.nodes_.end());
-  queue_.nodes_.insert(*this);
+  auto result = queue_.nodes_.emplace(id_, this);
+  DCHECK(result.second);
 }
 
 HTTP2PriorityQueue::Node::~Node() {
   if (!txn_) {
     queue_.numVirtualNodes_--;
   }
+  queue_.nodes_.erase(id_);
 }
 
 // Add a new node as a child of this node
@@ -446,12 +455,16 @@ HTTP2PriorityQueue::Handle HTTP2PriorityQueue::addTransaction(
   CHECK_NE(id, rootNodeId_);
   CHECK_NE(id, pri.streamDependency) << "Tried to create a loop in the tree";
   CHECK(!txn || !permanent);
-  Node* existingNode = find(id, depth);
-  if (existingNode) {
-    CHECK(!permanent);
-    existingNode->convertVirtualNode(CHECK_NOTNULL(txn));
-    updatePriority(existingNode, pri);
-    return existingNode;
+  if (largestId_ && id <= *largestId_) {
+    Node* existingNode = find(id, depth);
+    if (existingNode) {
+      CHECK(!permanent);
+      existingNode->convertVirtualNode(CHECK_NOTNULL(txn));
+      updatePriority(existingNode, pri);
+      return existingNode;
+    }
+  } else {
+    largestId_ = id;
   }
   if (!txn) {
     if (numVirtualNodes_ >= maxVirtualNodes_) {
@@ -474,15 +487,14 @@ HTTP2PriorityQueue::Handle HTTP2PriorityQueue::addTransaction(
       if (numVirtualNodes_ < maxVirtualNodes_) {
         // The parent node hasn't arrived yet. For now setting
         // its priority fields to default.
-        parent = dynamic_cast<Node*>(
-            addTransaction(pri.streamDependency,
-                           {rootNodeId_,
-                            http2::DefaultPriority.exclusive,
-                            http2::DefaultPriority.weight},
-                           nullptr,
-                           permanent,
-                           depth));
-        CHECK_NOTNULL(parent);
+        parent =
+            nodeFromBaseNode(addTransaction(pri.streamDependency,
+                                            {rootNodeId_,
+                                             http2::DefaultPriority.exclusive,
+                                             http2::DefaultPriority.weight},
+                                            nullptr,
+                                            permanent,
+                                            depth));
         if (depth) {
           *depth += 1;
         }
@@ -514,7 +526,7 @@ HTTP2PriorityQueue::Handle HTTP2PriorityQueue::updatePriority(
     HTTP2PriorityQueue::Handle handle,
     http2::PriorityUpdate pri,
     uint64_t* depth) {
-  Node* node = CHECK_NOTNULL(dynamic_cast<HTTP2PriorityQueue::Node*>(handle));
+  Node* node = nodeFromBaseNode(handle);
   pendingWeightChange_ = true;
   VLOG(4) << "Updating id=" << node->getID()
           << " with parent=" << pri.streamDependency
@@ -530,7 +542,7 @@ HTTP2PriorityQueue::Handle HTTP2PriorityQueue::updatePriority(
     return handle;
   }
 
-  Node* newParent = find(pri.streamDependency, depth);
+  Node* newParent = find(pri.streamDependency);
   if (!newParent) {
     if (pri.streamDependency == rootNodeId_ ||
         numVirtualNodes_ >= maxVirtualNodes_) {
@@ -539,15 +551,13 @@ HTTP2PriorityQueue::Handle HTTP2PriorityQueue::updatePriority(
       // allocate a virtual node for non-existing parent in my depenency tree
       // then do normal priority processing
       newParent =
-          dynamic_cast<Node*>(addTransaction(pri.streamDependency,
-                                             {rootNodeId_,
-                                              http2::DefaultPriority.exclusive,
-                                              http2::DefaultPriority.weight},
-                                             nullptr,
-                                             false,
-                                             depth));
+          nodeFromBaseNode(addTransaction(pri.streamDependency,
+                                          {rootNodeId_,
+                                           http2::DefaultPriority.exclusive,
+                                           http2::DefaultPriority.weight},
+                                          nullptr,
+                                          false));
 
-      CHECK_NOTNULL(newParent);
       VLOG(4) << "updatePriority missing parent, creating virtual parent="
               << newParent->getID() << " for txn=" << node->getID();
     }
@@ -564,7 +574,7 @@ HTTP2PriorityQueue::Handle HTTP2PriorityQueue::updatePriority(
 }
 
 void HTTP2PriorityQueue::removeTransaction(HTTP2PriorityQueue::Handle handle) {
-  Node* node = CHECK_NOTNULL(dynamic_cast<HTTP2PriorityQueue::Node*>(handle));
+  Node* node = nodeFromBaseNode(handle);
   pendingWeightChange_ = true;
   // TODO: or require the node to do it?
   if (node->isEnqueued()) {
@@ -582,8 +592,7 @@ void HTTP2PriorityQueue::removeTransaction(HTTP2PriorityQueue::Handle handle) {
 
 void HTTP2PriorityQueue::signalPendingEgress(Handle handle) {
   if (!handle->isEnqueued()) {
-    CHECK_NOTNULL(dynamic_cast<HTTP2PriorityQueue::Node*>(handle))
-        ->signalPendingEgress();
+    nodeFromBaseNode(handle)->signalPendingEgress();
     activeCount_++;
     pendingWeightChange_ = true;
   }
@@ -592,8 +601,7 @@ void HTTP2PriorityQueue::signalPendingEgress(Handle handle) {
 void HTTP2PriorityQueue::clearPendingEgress(Handle handle) {
   CHECK_GT(activeCount_, 0);
   // clear does a CHECK on handle->isEnqueued()
-  CHECK_NOTNULL(dynamic_cast<HTTP2PriorityQueue::Node*>(handle))
-      ->clearPendingEgress();
+  nodeFromBaseNode(handle)->clearPendingEgress();
   activeCount_--;
   pendingWeightChange_ = true;
 }
@@ -687,14 +695,14 @@ HTTP2PriorityQueue::Node* HTTP2PriorityQueue::find(HTTPCodec::StreamID id,
   if (id == rootNodeId_) {
     return nullptr;
   }
-  auto it = nodes_.find(id, Node::IdHash(), Node::IdNodeEqual());
+  auto it = nodes_.find(id);
   if (it == nodes_.end()) {
     return nullptr;
   }
   if (depth) {
-    *depth = it->calculateDepth();
+    *depth = it->second->calculateDepth();
   }
-  return &(*it);
+  return it->second;
 }
 
 void HTTP2PriorityQueue::updateEnqueuedWeight() {

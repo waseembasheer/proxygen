@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <chrono>
@@ -72,9 +71,22 @@ class HTTPSessionController {
   virtual void detachSession(const HTTPSessionBase* session) = 0;
 
   /**
-   * Inform the controller that the session's codec changed
+   * Inform the controller that the session's codec changed.
    */
   virtual void onSessionCodecChange(HTTPSessionBase* /*session*/) {
+  }
+
+  /**
+   * Invoked when the underlying transport is ready.
+   *
+   * On invocation, the controller can perform operations that depend on access
+   * to the transport (socket), such as setting up instrumentation or looking up
+   * configuration that depends on the peer's address.
+
+   * For HQ/QUIC, attachSession() is called before the underlying transport is
+   * initialized, so transport related operations must be performed here.
+   */
+  virtual void onTransportReady(HTTPSessionBase* /*session*/) {
   }
 
   /**

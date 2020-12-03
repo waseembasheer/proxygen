@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/lib/http/codec/HTTPCodecFilter.h>
@@ -19,7 +18,7 @@ namespace proxygen {
  * only examines the calls and callbacks that go through it.
  */
 
-class HTTPCodecPrinter: public PassThroughHTTPCodecFilter {
+class HTTPCodecPrinter : public PassThroughHTTPCodecFilter {
  public:
   /*
    * Called from SPDYCodec::parseIngress()
@@ -88,23 +87,24 @@ class HTTPCodecPrinter: public PassThroughHTTPCodecFilter {
    * Called from SPDYCodec::onGoaway() with different arguments
    *             HTTP2Codec::parseGoaway()
    */
-  void onGoaway(uint64_t lastGoodStreamID, ErrorCode code,
+  void onGoaway(uint64_t lastGoodStreamID,
+                ErrorCode code,
                 std::unique_ptr<folly::IOBuf> debugData = nullptr) override;
 
   /*
    * Called from SPDYCodec::onPing()
    *             HTTP2Codec::parsePing()
    */
-  void onPingRequest(uint64_t uniqueID) override;
+  void onPingRequest(uint64_t data) override;
 
   /*
    * Called from SPDYCodec::onPing()
    *             HTTP2Codec::parsePing()
    */
-  void onPingReply(uint64_t uniqueID) override;
+  void onPingReply(uint64_t data) override;
 
  protected:
-  void printPing(uint64_t uniqueID);
+  void printPing(uint64_t data);
 };
 
-}
+} // namespace proxygen

@@ -1,17 +1,16 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
-#include <proxygen/lib/http/session/HTTPTransaction.h>
 #include <proxygen/httpserver/RequestHandler.h>
 #include <proxygen/httpserver/ResponseHandler.h>
+#include <proxygen/lib/http/session/HTTPTransaction.h>
 
 namespace proxygen {
 
@@ -21,17 +20,16 @@ namespace proxygen {
  */
 class HTTPTransactionHandlerAdaptor : public RequestHandler {
  public:
-
   explicit HTTPTransactionHandlerAdaptor(HTTPTransactionHandler* handler)
-    : handler_(handler) {}
+      : handler_(handler) {
+  }
 
   void onRequest(std::unique_ptr<HTTPMessage> headers) noexcept override {
     // Note: HTTPTransactionHandlerAdaptor's will bypass any response filters.
     // They write directly to the transaction
     auto txn = downstream_->getTransaction();
     // I need the non-const original handler
-    auto origHandler =
-      const_cast<HTTPTransaction::Handler*>(txn->getHandler());
+    auto origHandler = const_cast<HTTPTransaction::Handler*>(txn->getHandler());
     handler_->setTransaction(txn);
     txn->setHandler(origHandler);
 
@@ -71,10 +69,11 @@ class HTTPTransactionHandlerAdaptor : public RequestHandler {
   void onEgressResumed() noexcept override {
     handler_->onEgressResumed();
   }
-  ~HTTPTransactionHandlerAdaptor() {}
+  ~HTTPTransactionHandlerAdaptor() {
+  }
 
  private:
   HTTPTransactionHandler* handler_;
 };
 
-}
+} // namespace proxygen

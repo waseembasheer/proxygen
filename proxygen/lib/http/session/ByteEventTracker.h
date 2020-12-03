@@ -1,17 +1,16 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/lib/http/session/AckLatencyEvent.h>
-#include <proxygen/lib/http/session/ByteEvents.h>
 #include <proxygen/lib/http/session/HTTPTransaction.h>
+#include <proxygen/lib/http/session/TransactionByteEvents.h>
 #include <proxygen/lib/utils/Time.h>
 
 namespace proxygen {
@@ -33,12 +32,8 @@ class ByteEventTracker {
     virtual ~Callback() {
     }
     virtual void onPingReplyLatency(int64_t latency) noexcept = 0;
-    virtual void onFirstByteEvent(HTTPTransaction* txn,
-                                  uint64_t offset,
-                                  bool bufferWriteTracked) noexcept = 0;
-    virtual void onLastByteEvent(HTTPTransaction* txn,
-                                 uint64_t offset,
-                                 bool bufferWriteTracked) noexcept = 0;
+    virtual void onTxnByteEventWrittenToBuf(
+        const ByteEvent& event) noexcept = 0;
     virtual void onDeleteTxnByteEvent() noexcept = 0;
   };
 
@@ -70,11 +65,20 @@ class ByteEventTracker {
                                  uint64_t bytesWritten);
 
   /**
+   * Called when a ByteEvent offset has been written to the socket.
+   *
+   * Triggered by processByteEvents. Can be overridden by subclasses to trigger
+   * adding timestamps on socket writes.
+   */
+  virtual void onByteEventWrittenToSocket(const ByteEvent& /* event */) {
+  }
+
+  /**
    * The following methods add byte events for tracking
    */
   void addPingByteEvent(size_t pingSize,
                         TimePoint timestamp,
-                        uint64_t bytesScheduled);
+                        uint64_t bytesScheduledBeforePing);
 
   virtual void addFirstBodyByteEvent(uint64_t offset, HTTPTransaction* txn);
 
@@ -102,22 +106,22 @@ class ByteEventTracker {
   }
 
   /** The base ByteEventTracker cannot track ACKs. */
-  virtual void addAckByteEvent(uint64_t /*offset*/, HTTPTransaction* /*txn*/) {
+  virtual void addAckByteEvent(uint64_t /*offset*/,
+                               ByteEvent::EventType /*eventType*/,
+                               HTTPTransaction* /*txn*/) {
   }
 
   /**
-   * HTTPSession uses preSend to truncate writes on an som or eom boundary.
+   * HTTPSession uses preSend to truncate writes when timestamping is required.
    *
-   * In TX and ACK-tracking ByteEventTrackers, this should examine pending
-   * byte events and return the number of bytes until the next first or last
-   * byte event, or 0 if none are pending.  If non-zero is returned
-   * then som and/or eom may be set to indicate that the buffer contains the
-   * start and/or end of a message so that relevant timestamping can be enabled.
-   *
+   * In TX and ACK-tracking ByteEventTrackers, preSend should examine pending
+   * byte events and return the number of bytes until the next byte requiring
+   * timestamping or 0 if none are pending. In addition, when returning non-zero
+   * value preSend should indicate the timestamping required (TX and/or ACK).
    */
   virtual uint64_t preSend(bool* /*cork*/,
-                           bool* /*som*/,
-                           bool* /*eom*/,
+                           bool* /*timestampTx*/,
+                           bool* /*timestampAck*/,
                            uint64_t /*bytesWritten*/) {
     return 0;
   }
@@ -126,26 +130,12 @@ class ByteEventTracker {
   }
 
  protected:
+  // the last value of byteWritten passed to processByteEvents
+  // should always increase
+  uint64_t bytesWritten_ = 0;
+
   // byteEvents_ is in the ascending order of ByteEvent::byteOffset_
   folly::CountedIntrusiveList<ByteEvent, &ByteEvent::listHook> byteEvents_;
-
-  /**
-   * Called when a FIRST_BYTE event is processed (som = start of message).
-   *
-   * Used for TX and ACK-tracking ByteEventTrackers to update cached position of
-   * the next FIRST_BYTE event.
-   */
-  virtual void somEventProcessed() {
-  }
-
-  /**
-   * Called when a LAST_BYTE event is processed (eom = end of message).
-   *
-   * Used for TX and ACK-tracking ByteEventTrackers to update cached position of
-   * the next LAST_BYTE event.
-   */
-  virtual void eomEventProcessed() {
-  }
 
   Callback* callback_;
 };

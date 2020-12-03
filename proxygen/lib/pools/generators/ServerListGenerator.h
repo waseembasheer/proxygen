@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <chrono>
@@ -45,6 +44,12 @@ class ServerListGenerator {
 
     std::string name;
     folly::SocketAddress address;
+    // A field for other addresses that alias the same server.
+    // For example a server may have a v4 and a v6 address.
+    // Most vector implementations start with a cap of 0 so minimal memory
+    // would be used when unused and is why this is still separated from
+    // the above preferred address.
+    std::vector<folly::SocketAddress> altAddresses;
     std::map<std::string, std::string> properties;
     // Optional parameter. It's only set if a server belongs to a group, which
     // is configured in Pool Config.
@@ -203,5 +208,37 @@ class ServerListGenerator {
 };
 
 using ServerConfigList = std::vector<ServerListGenerator::ServerConfig>;
+
+// A default ServerListGenerator::Callback interface for consumers that
+// simply want the call status and result returned directly.
+class ServerListCallback : public ServerListGenerator::Callback {
+ public:
+  enum StatusEnum {
+    NOT_FINISHED,
+    SUCCESS,
+    ERROR,
+    CANCELLED,
+  };
+
+  explicit ServerListCallback() : status(NOT_FINISHED) {
+  }
+
+  void onServerListAvailable(std::vector<ServerListGenerator::ServerConfig>&&
+                                 results) noexcept override {
+    servers.swap(results);
+    status = SUCCESS;
+  }
+  void onServerListError(std::exception_ptr error) noexcept override {
+    errorPtr = error;
+    status = ERROR;
+  }
+  virtual void serverListRequestCancelled() {
+    status = CANCELLED;
+  }
+
+  StatusEnum status;
+  std::vector<ServerListGenerator::ServerConfig> servers;
+  std::exception_ptr errorPtr;
+};
 
 } // namespace proxygen

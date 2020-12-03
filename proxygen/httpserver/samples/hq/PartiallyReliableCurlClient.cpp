@@ -1,4 +1,10 @@
-// Copyright 2004-present Facebook. All Rights Reserved.
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
+ *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
 
 #include <proxygen/httpserver/samples/hq/PartiallyReliableCurlClient.h>
 
@@ -11,7 +17,7 @@ void PartiallyReliableCurlClient::onHeadersComplete(
     chunkSize_ = folly::to<uint64_t>(value);
   }
 
-  if (!chunkSize_.hasValue()) {
+  if (!chunkSize_.has_value()) {
     LOG(ERROR) << __func__
                << ": no pr-chunk-size header found in response headers";
     txn_->sendEOM();
@@ -43,26 +49,23 @@ void PartiallyReliableCurlClient::onError(
 }
 
 void PartiallyReliableCurlClient::onBodyPeek(
-    uint64_t offset, const folly::IOBufQueue& /* chain */) noexcept {
+    uint64_t offset, const folly::IOBuf& /* chain */) noexcept {
   LOG_IF(INFO, loggingEnabled_)
       << "Got " << __func__ << " at offset " << offset;
 }
 
-void PartiallyReliableCurlClient::onBodySkipped(
-    uint64_t offset) noexcept {
+void PartiallyReliableCurlClient::onBodySkipped(uint64_t offset) noexcept {
   LOG_IF(INFO, loggingEnabled_)
       << "Got " << __func__ << " at offset " << offset;
 }
 
-void PartiallyReliableCurlClient::onBodyRejected(
-    uint64_t offset) noexcept {
+void PartiallyReliableCurlClient::onBodyRejected(uint64_t offset) noexcept {
   LOG_IF(INFO, loggingEnabled_)
       << "Got " << __func__ << " at offset " << offset;
 }
 
 void PartiallyReliableCurlClient::onBodyWithOffset(
-    uint64_t bodyOffset,
-    std::unique_ptr<folly::IOBuf> chain) noexcept {
+    uint64_t bodyOffset, std::unique_ptr<folly::IOBuf> chain) noexcept {
   // Cancel any pending timeouts.
   cancelTimeout();
 

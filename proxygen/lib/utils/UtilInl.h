@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/Range.h>
@@ -35,9 +34,8 @@ struct AsciiCaseUnderscoreInsensitive {
 };
 
 // Case-insensitive string comparison
-inline bool caseUnderscoreInsensitiveEqual(
-    folly::StringPiece s,
-    folly::StringPiece t) {
+inline bool caseUnderscoreInsensitiveEqual(folly::StringPiece s,
+                                           folly::StringPiece t) {
   if (s.size() != t.size()) {
     return false;
   }
@@ -47,12 +45,21 @@ inline bool caseUnderscoreInsensitiveEqual(
 }
 
 inline bool validateURL(folly::ByteRange url) {
-  for (auto p: url) {
+  for (auto p : url) {
     if (p <= 0x20 || p == 0x7f) {
       // no controls or unescaped spaces
       return false;
-      }
+    }
   }
   return true;
 }
+
+inline size_t findLastOf(folly::StringPiece sp, char c) {
+  size_t pos = sp.size();
+  while (--pos != std::string::npos && sp[pos] != c) {
+    // pass
+  }
+  return pos;
 }
+
+} // namespace proxygen

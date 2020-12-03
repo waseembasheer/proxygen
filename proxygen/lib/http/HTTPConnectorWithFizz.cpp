@@ -1,16 +1,16 @@
 /*
- *  Copyright (c) 2004-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/HTTPConnectorWithFizz.h>
 #include <proxygen/lib/http/session/HTTPUpstreamSession.h>
 
-using namespace fizz;
+#include <folly/io/SocketOptionMap.h>
+
 using namespace fizz::client;
 
 namespace proxygen {
@@ -22,7 +22,7 @@ void HTTPConnectorWithFizz::connectFizz(
     std::shared_ptr<const fizz::CertificateVerifier> verifier,
     std::chrono::milliseconds totalTimeout,
     std::chrono::milliseconds tcpConnectTimeout,
-    const folly::AsyncSocket::OptionMap& socketOptions,
+    const folly::SocketOptionMap& socketOptions,
     const folly::SocketAddress& bindAddr,
     folly::Optional<std::string> sni,
     folly::Optional<std::string> pskIdentity) {

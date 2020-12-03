@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/lib/http/session/HTTPTransaction.h>
@@ -77,6 +76,12 @@ class RequestHandler {
   virtual void onError(ProxygenError err) noexcept = 0;
 
   /**
+   * Signals from HTTP layer when we receive GOAWAY frame.
+   */
+  virtual void onGoaway(ErrorCode /*code*/) noexcept {
+  }
+
+  /**
    * Signals from HTTP layer when client queue is full or empty. If you are
    * sending a streaming response, consider implementing these and acting
    * accordingly. Saves your server from running out of memory.
@@ -100,13 +105,15 @@ class RequestHandler {
    */
   virtual ExMessageHandler* getExHandler() noexcept {
     LOG(FATAL) << "Not implemented";
+    folly::assume_unreachable();
   }
 
   virtual ResponseHandler* getDownstream() noexcept {
     return downstream_;
   }
 
-  virtual ~RequestHandler() {}
+  virtual ~RequestHandler() {
+  }
 
  protected:
   /**
@@ -116,4 +123,4 @@ class RequestHandler {
   ResponseHandler* downstream_{nullptr};
 };
 
-}
+} // namespace proxygen

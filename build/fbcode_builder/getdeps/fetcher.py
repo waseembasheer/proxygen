@@ -1,9 +1,8 @@
-# Copyright (c) 2019-present, Facebook, Inc.
-# All rights reserved.
+#!/usr/bin/env python3
+# Copyright (c) Facebook, Inc. and its affiliates.
 #
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree. An additional grant
-# of patent rights can be found in the PATENTS file in the same directory.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
 
 from __future__ import absolute_import, division, print_function, unicode_literals
 
@@ -18,6 +17,8 @@ import sys
 import tarfile
 import time
 import zipfile
+from datetime import datetime
+from typing import Dict, NamedTuple
 
 from .copytree import prefetch_dir_if_eden
 from .envfuncs import Env
@@ -27,15 +28,25 @@ from .runcmd import run_cmd
 
 
 try:
-    from urlparse import urlparse
     from urllib import urlretrieve
+    from urlparse import urlparse
 except ImportError:
     from urllib.parse import urlparse
     from urllib.request import urlretrieve
 
 
+def file_name_is_cmake_file(file_name):
+    file_name = file_name.lower()
+    base = os.path.basename(file_name)
+    return (
+        base.endswith(".cmake")
+        or base.endswith(".cmake.in")
+        or base == "cmakelists.txt"
+    )
+
+
 class ChangeStatus(object):
-    """ Indicates the nature of changes that happened while updating
+    """Indicates the nature of changes that happened while updating
     the source directory.  There are two broad uses:
     * When extracting archives for third party software we want to
       know that we did something (eg: we either extracted code or
@@ -48,9 +59,9 @@ class ChangeStatus(object):
     """
 
     def __init__(self, all_changed=False):
-        """ Construct a ChangeStatus object.  The default is to create
+        """Construct a ChangeStatus object.  The default is to create
         a status that indicates no changes, but passing all_changed=True
-        will create one that indicates that everything changed """
+        will create one that indicates that everything changed"""
         if all_changed:
             self.source_files = 1
             self.make_files = 1
@@ -59,7 +70,7 @@ class ChangeStatus(object):
             self.make_files = 0
 
     def record_change(self, file_name):
-        """ Used by the shipit fetcher to record changes as it updates
+        """Used by the shipit fetcher to record changes as it updates
         files in the destination.  If the file name might be one used
         in the cmake build system that we use for 1st party code, then
         record that as a "make file" change.  We could broaden this
@@ -68,51 +79,52 @@ class ChangeStatus(object):
         If the file isn't a build file and is under the `fbcode_builder`
         dir then we don't class that as an interesting change that we
         might need to rebuild, so we ignore it.
-        Otherwise we record the file as a source file change. """
+        Otherwise we record the file as a source file change."""
 
-        if "cmake" in file_name.lower():
+        file_name = file_name.lower()
+        if file_name_is_cmake_file(file_name):
             self.make_files += 1
-            return
-        if "/fbcode_builder/" in file_name:
-            return
-        self.source_files += 1
+        elif "/fbcode_builder/cmake" in file_name:
+            self.source_files += 1
+        elif "/fbcode_builder/" not in file_name:
+            self.source_files += 1
 
     def sources_changed(self):
-        """ Returns true if any source files were changed during
+        """Returns true if any source files were changed during
         an update operation.  This will typically be used to decide
         that the build system to be run on the source dir in an
-        incremental mode """
+        incremental mode"""
         return self.source_files > 0
 
     def build_changed(self):
-        """ Returns true if any build files were changed during
+        """Returns true if any build files were changed during
         an update operation.  This will typically be used to decidfe
         that the build system should be reconfigured and re-run
-        as a full build """
+        as a full build"""
         return self.make_files > 0
 
 
 class Fetcher(object):
-    """ The Fetcher is responsible for fetching and extracting the
+    """The Fetcher is responsible for fetching and extracting the
     sources for project.  The Fetcher instance defines where the
     extracted data resides and reports this to the consumer via
-    its `get_src_dir` method. """
+    its `get_src_dir` method."""
 
     def update(self):
-        """ Brings the src dir up to date, ideally minimizing
+        """Brings the src dir up to date, ideally minimizing
         changes so that a subsequent build doesn't over-build.
         Returns a ChangeStatus object that helps the caller to
         understand the nature of the changes required during
-        the update. """
+        the update."""
         return ChangeStatus()
 
     def clean(self):
-        """ Reverts any changes that might have been made to
-        the src dir """
+        """Reverts any changes that might have been made to
+        the src dir"""
         pass
 
     def hash(self):
-        """ Returns a hash that identifies the version of the code in the
+        """Returns a hash that identifies the version of the code in the
         working copy.  For a git repo this is commit hash for the working
         copy.  For other Fetchers this should relate to the version of
         the code in the src dir.  The intent is that if a manifest
@@ -125,13 +137,73 @@ class Fetcher(object):
         pass
 
     def get_src_dir(self):
-        """ Returns the source directory that the project was
-        extracted into """
+        """Returns the source directory that the project was
+        extracted into"""
         pass
 
 
+class LocalDirFetcher(object):
+    """This class exists to override the normal fetching behavior, and
+    use an explicit user-specified directory for the project sources.
+
+    This fetcher cannot update or track changes.  It always reports that the
+    project has changed, forcing it to always be built."""
+
+    def __init__(self, path):
+        self.path = os.path.realpath(path)
+
+    def update(self):
+        return ChangeStatus(all_changed=True)
+
+    def hash(self):
+        return "0" * 40
+
+    def get_src_dir(self):
+        return self.path
+
+
+class SystemPackageFetcher(object):
+    def __init__(self, build_options, packages):
+        self.manager = build_options.host_type.get_package_manager()
+        self.packages = packages.get(self.manager)
+        if self.packages:
+            self.installed = None
+        else:
+            self.installed = False
+
+    def packages_are_installed(self):
+        if self.installed is not None:
+            return self.installed
+
+        if self.manager == "rpm":
+            result = run_cmd(["rpm", "-q"] + self.packages, allow_fail=True)
+            self.installed = result == 0
+        elif self.manager == "deb":
+            result = run_cmd(["dpkg", "-s"] + self.packages, allow_fail=True)
+            self.installed = result == 0
+        else:
+            self.installed = False
+
+        return self.installed
+
+    def update(self):
+        assert self.installed
+        return ChangeStatus(all_changed=False)
+
+    def hash(self):
+        return "0" * 40
+
+    def get_src_dir(self):
+        return None
+
+
+class PreinstalledNopFetcher(SystemPackageFetcher):
+    def __init__(self):
+        self.installed = True
+
+
 class GitFetcher(Fetcher):
-    DEFAULT_DEPTH = 100
+    DEFAULT_DEPTH = 1
 
     def __init__(self, build_options, manifest, repo_url, rev, depth):
         # Extract the host/path portions of the URL and generate a flattened
@@ -148,7 +220,7 @@ class GitFetcher(Fetcher):
             os.makedirs(repos_dir)
         self.repo_dir = os.path.join(repos_dir, directory)
 
-        if not rev:
+        if not rev and build_options.project_hashes:
             hash_file = os.path.join(
                 build_options.project_hashes,
                 re.sub("\\.git$", "-rev.txt", url.path[1:]),
@@ -190,7 +262,7 @@ class GitFetcher(Fetcher):
             return ChangeStatus()
 
         print("Updating %s -> %s" % (self.repo_dir, self.rev))
-        run_cmd(["git", "fetch", "origin"], cwd=self.repo_dir)
+        run_cmd(["git", "fetch", "origin", self.rev], cwd=self.repo_dir)
         run_cmd(["git", "checkout", self.rev], cwd=self.repo_dir)
         run_cmd(["git", "submodule", "update", "--init"], cwd=self.repo_dir)
 
@@ -265,9 +337,9 @@ def does_file_need_update(src_name, src_st, dest_name):
 
 
 def copy_if_different(src_name, dest_name):
-    """ Copy src_name -> dest_name, but only touch dest_name
+    """Copy src_name -> dest_name, but only touch dest_name
     if src_name is different from dest_name, making this a
-    more build system friendly way to copy. """
+    more build system friendly way to copy."""
     src_st = os.lstat(src_name)
     if not does_file_need_update(src_name, src_st, dest_name):
         return False
@@ -291,6 +363,15 @@ def copy_if_different(src_name, dest_name):
     return True
 
 
+def list_files_under_dir_newer_than_timestamp(dir_to_scan, ts):
+    for root, _dirs, files in os.walk(dir_to_scan):
+        for src_file in files:
+            full_name = os.path.join(root, src_file)
+            st = os.lstat(full_name)
+            if st.st_mtime > ts:
+                yield full_name
+
+
 class ShipitPathMap(object):
     def __init__(self):
         self.roots = []
@@ -298,9 +379,9 @@ class ShipitPathMap(object):
         self.exclusion = []
 
     def add_mapping(self, fbsource_dir, target_dir):
-        """ Add a posix path or pattern.  We cannot normpath the input
+        """Add a posix path or pattern.  We cannot normpath the input
         here because that would change the paths from posix to windows
-        form and break the logic throughout this class. """
+        form and break the logic throughout this class."""
         self.roots.append(fbsource_dir)
         self.mapping.append((fbsource_dir, target_dir))
 
@@ -308,9 +389,9 @@ class ShipitPathMap(object):
         self.exclusion.append(re.compile(pattern))
 
     def _minimize_roots(self):
-        """ compute the de-duplicated set of roots within fbsource.
+        """compute the de-duplicated set of roots within fbsource.
         We take the shortest common directory prefix to make this
-        determination """
+        determination"""
         self.roots.sort(key=len)
         minimized = []
 
@@ -406,29 +487,41 @@ class ShipitPathMap(object):
         return change_status
 
 
-FBSOURCE_REPO_HASH = {}
+class FbsourceRepoData(NamedTuple):
+    hash: str
+    date: str
 
 
-def get_fbsource_repo_hash(build_options):
-    """ Returns the hash for the fbsource repo.
+FBSOURCE_REPO_DATA: Dict[str, FbsourceRepoData] = {}
+
+
+def get_fbsource_repo_data(build_options):
+    """Returns the commit metadata for the fbsource repo.
     Since we may have multiple first party projects to
     hash, and because we don't mutate the repo, we cache
-    this hash in a global. """
-    global FBSOURCE_REPO_HASH
-    cached_hash = FBSOURCE_REPO_HASH.get(build_options.fbsource_dir)
-    if cached_hash:
-        return cached_hash
+    this hash in a global."""
+    cached_data = FBSOURCE_REPO_DATA.get(build_options.fbsource_dir)
+    if cached_data:
+        return cached_data
 
-    cmd = ["hg", "log", "-r.", "-T{node}"]
+    cmd = ["hg", "log", "-r.", "-T{node}\n{date|hgdate}"]
     env = Env()
     env.set("HGPLAIN", "1")
-    cached_hash = subprocess.check_output(
+    log_data = subprocess.check_output(
         cmd, cwd=build_options.fbsource_dir, env=dict(env.items())
     ).decode("ascii")
 
-    FBSOURCE_REPO_HASH[build_options.fbsource_dir] = cached_hash
+    (hash, datestr) = log_data.split("\n")
 
-    return cached_hash
+    # datestr is like "seconds fractionalseconds"
+    # We want "20200324.113140"
+    (unixtime, _fractional) = datestr.split(" ")
+    date = datetime.fromtimestamp(int(unixtime)).strftime("%Y%m%d.%H%M%S")
+    cached_data = FbsourceRepoData(hash=hash, date=date)
+
+    FBSOURCE_REPO_DATA[build_options.fbsource_dir] = cached_data
+
+    return cached_data
 
 
 class SimpleShipitTransformerFetcher(Fetcher):
@@ -455,7 +548,10 @@ class SimpleShipitTransformerFetcher(Fetcher):
         return mapping.mirror(self.build_options.fbsource_dir, self.repo_dir)
 
     def hash(self):
-        return get_fbsource_repo_hash(self.build_options)
+        # We return a fixed non-hash string for in-fbsource builds.
+        # We're relying on the `update` logic to correctly invalidate
+        # the build in the case that files have changed.
+        return "fbsource"
 
     def get_src_dir(self):
         return self.repo_dir
@@ -503,7 +599,6 @@ class ShipitTransformerFetcher(Fetcher):
                     "--skip-source-clean",
                     "--skip-push",
                     "--skip-reset",
-                    "--skip-project-specific",
                     "--destination-use-anonymous-https",
                     "--create-new-repo-output-path=" + tmp_path,
                 ]
@@ -522,7 +617,8 @@ class ShipitTransformerFetcher(Fetcher):
             raise
 
     def hash(self):
-        return get_fbsource_repo_hash(self.build_options)
+        # We return a fixed non-hash string for in-fbsource builds.
+        return "fbsource"
 
     def get_src_dir(self):
         return self.repo_dir
@@ -554,7 +650,7 @@ def download_url_to_file_with_progress(url, file_name):
     start = time.time()
     try:
         (_filename, headers) = urlretrieve(url, file_name, reporthook=progress.progress)
-    except OSError as exc:
+    except (OSError, IOError) as exc:  # noqa: B014
         raise TransientFailure(
             "Failed to download %s to %s: %s" % (url, file_name, str(exc))
         )
@@ -562,7 +658,7 @@ def download_url_to_file_with_progress(url, file_name):
     end = time.time()
     sys.stdout.write(" [Complete in %f seconds]\n" % (end - start))
     sys.stdout.flush()
-    print("%s" % (headers))
+    print(f"{headers}")
 
 
 class ArchiveFetcher(Fetcher):

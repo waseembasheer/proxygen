@@ -1,11 +1,9 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 #pragma once
@@ -28,7 +26,6 @@ namespace proxygen {
  */
 class WheelTimerInstance {
  public:
-
   // will ignore all scheduleTimeout operations, to be used instead of
   // nullptr for HHWheelTimer
   WheelTimerInstance();
@@ -63,12 +60,11 @@ class WheelTimerInstance {
   }
 
  private:
-
-  folly::HHWheelTimer* wheelTimerPtr_{nullptr};  // to support cases when
+  folly::HHWheelTimer* wheelTimerPtr_{nullptr}; // to support cases when
   // external WheelTimer is
   // specified
 
   std::chrono::milliseconds defaultTimeoutMS_;
 };
 
-}
+} // namespace proxygen

@@ -1,25 +1,25 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/SSLContext.h>
+#include <fstream>
 #include <proxygen/lib/http/HTTPConnector.h>
 #include <proxygen/lib/http/session/HTTPTransaction.h>
 #include <proxygen/lib/utils/URL.h>
-#include <fstream>
 
 namespace CurlService {
 
-class CurlClient : public proxygen::HTTPConnector::Callback,
-                   public proxygen::HTTPTransactionHandler {
+class CurlClient
+    : public proxygen::HTTPConnector::Callback
+    , public proxygen::HTTPTransactionHandler {
 
   class CurlPushHandler : public proxygen::HTTPTransactionHandler {
 
@@ -79,6 +79,8 @@ class CurlClient : public proxygen::HTTPConnector::Callback,
 
   virtual ~CurlClient() = default;
 
+  bool saveResponseToFile(const std::string& outputFilename);
+
   static proxygen::HTTPHeaders parseHeaders(const std::string& headersString);
 
   // initial SSL related structures
@@ -127,8 +129,14 @@ class CurlClient : public proxygen::HTTPConnector::Callback,
     loggingEnabled_ = enabled;
   }
 
-protected:
+  void setEOMFunc(std::function<void()> eomFunc) {
+    eomFunc_ = eomFunc;
+  }
+
+ protected:
   void sendBodyFromFile();
+
+  void setupHeaders();
 
   void printMessageImpl(proxygen::HTTPMessage* msg,
                         const std::string& tag = "");
@@ -148,12 +156,16 @@ protected:
   unsigned short httpMinor_;
   bool egressPaused_{false};
   std::unique_ptr<std::ifstream> inputFile_;
+  std::unique_ptr<std::ofstream> outputFile_;
+  std::unique_ptr<std::ostream> outputStream_;
   bool partiallyReliable_{false};
 
   std::unique_ptr<proxygen::HTTPMessage> response_;
   std::vector<std::unique_ptr<CurlPushHandler>> pushTxnHandlers_;
 
+  folly::Optional<std::function<void()>> eomFunc_;
+
   friend class CurlPushHandler;
 };
 
-} // CurlService namespace
+} // namespace CurlService

@@ -1,20 +1,19 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/compress/QPACKContext.h>
 
 #include <glog/logging.h>
 
 namespace proxygen {
 
-QPACKContext::QPACKContext(uint32_t tableSize, bool trackReferences) :
-    table_(tableSize, trackReferences) {
+QPACKContext::QPACKContext(uint32_t tableSize, bool trackReferences)
+    : table_(tableSize, trackReferences) {
 }
 
 const HPACKHeader& QPACKContext::getHeader(bool isStatic,
@@ -22,6 +21,7 @@ const HPACKHeader& QPACKContext::getHeader(bool isStatic,
                                            uint32_t base,
                                            bool aboveBase) {
   if (isStatic) {
+    staticRefs_++;
     return getStaticTable().getHeader(index);
   }
   if (aboveBase) {
@@ -32,9 +32,8 @@ const HPACKHeader& QPACKContext::getHeader(bool isStatic,
   return table_.getHeader(index, base);
 }
 
-void QPACKContext::seedHeaderTable(
-  std::vector<HPACKHeader>& headers) {
-  for (auto& header: headers) {
+void QPACKContext::seedHeaderTable(std::vector<HPACKHeader>& headers) {
+  for (auto& header : headers) {
     table_.add(std::move(header));
   }
 }
@@ -48,4 +47,4 @@ std::ostream& operator<<(std::ostream& os, const QPACKContext& context) {
   return os;
 }
 
-}
+} // namespace proxygen

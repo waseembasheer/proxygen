@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/httpserver/ResponseHandler.h>
@@ -33,8 +32,8 @@ class PushHandler;
  *   RequestHandler is responsible for handling it.
  */
 class RequestHandlerAdaptor
-    : public HTTPTransactionHandler,
-      public ResponseHandler {
+    : public HTTPTransactionHandler
+    , public ResponseHandler {
  public:
   explicit RequestHandlerAdaptor(RequestHandler* requestHandler);
 
@@ -50,6 +49,7 @@ class RequestHandlerAdaptor
   void onEOM() noexcept override;
   void onUpgrade(UpgradeProtocol protocol) noexcept override;
   void onError(const HTTPException& error) noexcept override;
+  void onGoaway(ErrorCode code) noexcept override;
   void onEgressPaused() noexcept override;
   void onEgressResumed() noexcept override;
   void onExTransaction(HTTPTransaction* txn) noexcept override;
@@ -64,8 +64,8 @@ class RequestHandlerAdaptor
   void refreshTimeout() noexcept override;
   void pauseIngress() noexcept override;
   void resumeIngress() noexcept override;
-  ResponseHandler* newPushedResponse(
-    PushHandler* pushHandler) noexcept override;
+  folly::Expected<ResponseHandler*, ProxygenError> newPushedResponse(
+      PushHandler* pushHandler) noexcept override;
   ResponseHandler* newExMessage(ExMessageHandler* exHandler,
                                 bool unidirectional) noexcept override;
   const wangle::TransportInfo& getSetupTransportInfo() const noexcept override;
@@ -77,4 +77,4 @@ class RequestHandlerAdaptor
   ProxygenError err_{kErrorNone};
 };
 
-}
+} // namespace proxygen

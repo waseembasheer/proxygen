@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/httpserver/HTTPServerAcceptor.h>
 
 #include <folly/ExceptionString.h>
@@ -21,8 +20,7 @@ using folly::SocketAddress;
 namespace proxygen {
 
 AcceptorConfiguration HTTPServerAcceptor::makeConfig(
-    const HTTPServer::IPConfig& ipConfig,
-    const HTTPServerOptions& opts) {
+    const HTTPServer::IPConfig& ipConfig, const HTTPServerOptions& opts) {
 
   AcceptorConfiguration conf;
   conf.bindAddress = ipConfig.address;
@@ -36,7 +34,7 @@ AcceptorConfiguration HTTPServerAcceptor::makeConfig(
 
   if (opts.enableExHeaders) {
     conf.egressSettings.push_back(
-      HTTPSetting(SettingsId::ENABLE_EX_HEADERS, 1));
+        HTTPSetting(SettingsId::ENABLE_EX_HEADERS, 1));
   }
 
   if (ipConfig.protocol == HTTPServer::Protocol::SPDY) {
@@ -44,7 +42,7 @@ AcceptorConfiguration HTTPServerAcceptor::makeConfig(
   } else if (ipConfig.protocol == HTTPServer::Protocol::HTTP2) {
     conf.plaintextProtocol = http2::kProtocolCleartextString;
   } else if (opts.h2cEnabled) {
-    conf.allowedPlaintextUpgradeProtocols = { http2::kProtocolCleartextString };
+    conf.allowedPlaintextUpgradeProtocols = {http2::kProtocolCleartextString};
   }
 
   conf.sslContextConfigs = ipConfig.sslConfigs;
@@ -56,20 +54,24 @@ AcceptorConfiguration HTTPServerAcceptor::makeConfig(
   if (ipConfig.ticketSeeds) {
     conf.initialTicketSeeds = *ipConfig.ticketSeeds;
   }
-  if (ipConfig.acceptorSocketOptions.hasValue()) {
+  if (ipConfig.acceptorSocketOptions.has_value()) {
     conf.setSocketOptions(ipConfig.acceptorSocketOptions.value());
+    auto it = ipConfig.acceptorSocketOptions->find({SOL_SOCKET, SO_REUSEPORT});
+    if (it != ipConfig.acceptorSocketOptions->end() && it->second != 0) {
+      conf.reusePort = true;
+    }
   }
   return conf;
 }
 
 std::unique_ptr<HTTPServerAcceptor> HTTPServerAcceptor::make(
-  const AcceptorConfiguration& conf,
-  const HTTPServerOptions& opts,
-  const std::shared_ptr<HTTPCodecFactory>& codecFactory) {
+    const AcceptorConfiguration& conf,
+    const HTTPServerOptions& opts,
+    const std::shared_ptr<HTTPCodecFactory>& codecFactory) {
   // Create a copy of the filter chain in reverse order since we need to create
   // Handlers in that order.
   std::vector<RequestHandlerFactory*> handlerFactories;
-  for (auto& f: opts.handlerFactories) {
+  for (auto& f : opts.handlerFactories) {
     handlerFactories.push_back(f.get());
   }
   std::reverse(handlerFactories.begin(), handlerFactories.end());
@@ -96,8 +98,7 @@ HTTPServerAcceptor::~HTTPServerAcceptor() {
 }
 
 HTTPTransactionHandler* HTTPServerAcceptor::newHandler(
-    HTTPTransaction& txn,
-    HTTPMessage* msg) noexcept {
+    HTTPTransaction& txn, HTTPMessage* msg) noexcept {
 
   SocketAddress clientAddr, vipAddr;
   txn.getPeerAddress(clientAddr);
@@ -107,7 +108,7 @@ HTTPTransactionHandler* HTTPServerAcceptor::newHandler(
 
   // Create filters chain
   RequestHandler* h = nullptr;
-  for (auto& factory: handlerFactories_) {
+  for (auto& factory : handlerFactories_) {
     h = factory->onRequest(h, msg);
   }
 
@@ -115,7 +116,7 @@ HTTPTransactionHandler* HTTPServerAcceptor::newHandler(
 }
 
 void HTTPServerAcceptor::onNewConnection(
-    folly::AsyncTransportWrapper::UniquePtr sock,
+    folly::AsyncTransport::UniquePtr sock,
     const SocketAddress* address,
     const std::string& nextProtocolName,
     SecureTransportType secureTransportType,
@@ -140,4 +141,4 @@ void HTTPServerAcceptor::onConnectionsDrained() {
   }
 }
 
-}
+} // namespace proxygen

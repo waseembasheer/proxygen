@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/httpserver/samples/echo/EchoHandler.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
@@ -55,8 +54,8 @@ TEST_F(EchoHandlerFixture, OnProperRequestSendsResponse) {
       .WillOnce(DoAll(SaveArg<0>(&response), Return()));
   EXPECT_CALL(*responseHandler, sendEOM()).WillOnce(Return());
 
-  // Since we know we dont touch request, its ok to pass `nullptr` here.
-  handler->onRequest(nullptr);
+  // Since we know we dont touch request, its ok to pass an empty message here.
+  handler->onRequest(std::make_unique<HTTPMessage>());
   handler->onEOM();
   handler->requestComplete();
 
@@ -82,8 +81,8 @@ TEST_F(EchoHandlerFixture, ReplaysBodyProperly) {
 
   EXPECT_CALL(*responseHandler, sendEOM()).WillOnce(Return());
 
-  // Since we know we dont touch request, its ok to pass `nullptr` here.
-  handler->onRequest(nullptr);
+  // Since we know we dont touch request, its ok to pass an empty message here.
+  handler->onRequest(std::make_unique<HTTPMessage>());
   handler->onBody(folly::IOBuf::copyBuffer("part1"));
   handler->onBody(folly::IOBuf::copyBuffer("part2"));
   handler->onEOM();

@@ -1,11 +1,9 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 #pragma once
@@ -87,7 +85,8 @@ class HQUnidirStreamDispatcher
     virtual ~Callback() = default;
   }; // Callback
 
-  explicit HQUnidirStreamDispatcher(Callback& sink);
+  explicit HQUnidirStreamDispatcher(Callback& sink,
+                                    proxygen::TransportDirection direction);
 
   virtual ~HQUnidirStreamDispatcher() override = default;
 
@@ -150,5 +149,6 @@ class HQUnidirStreamDispatcher
   std::unique_ptr<ControlCallback> controlStreamCallback_;
   Callback& sink_;
   std::unordered_set<quic::StreamId> pendingStreams_;
+  proxygen::TransportDirection direction_;
 };
 } // namespace proxygen

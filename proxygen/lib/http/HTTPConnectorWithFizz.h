@@ -1,15 +1,15 @@
 /*
- *  Copyright (c) 2004-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <fizz/client/AsyncFizzClient.h>
+#include <folly/io/SocketOptionMap.h>
 #include <proxygen/lib/http/HTTPConnector.h>
 
 /**
@@ -31,8 +31,7 @@ class HTTPConnectorWithFizz : public HTTPConnector {
       std::chrono::milliseconds totalTimeout = std::chrono::milliseconds(0),
       std::chrono::milliseconds tcpConnectTimeout =
           std::chrono::milliseconds(0),
-      const folly::AsyncSocket::OptionMap& socketOptions =
-          folly::AsyncSocket::emptyOptionMap,
+      const folly::SocketOptionMap& socketOptions = folly::emptySocketOptionMap,
       const folly::SocketAddress& bindAddr = folly::AsyncSocket::anyAddress(),
       folly::Optional<std::string> sni = folly::none,
       folly::Optional<std::string> pskIdentity = folly::none);

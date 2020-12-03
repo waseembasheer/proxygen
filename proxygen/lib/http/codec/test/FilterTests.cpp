@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <folly/portability/GTest.h>
 #include <limits>
 #include <proxygen/lib/http/HTTPHeaderSize.h>
@@ -25,7 +24,7 @@ namespace {
 const uint32_t kInitialCapacity = 12345;
 }
 
-class MockFlowControlCallback: public FlowControlFilter::Callback {
+class MockFlowControlCallback : public FlowControlFilter::Callback {
  public:
   MOCK_METHOD0(onConnectionSendWindowOpen, void());
   MOCK_METHOD0(onConnectionSendWindowClosed, void());
@@ -33,15 +32,14 @@ class MockFlowControlCallback: public FlowControlFilter::Callback {
 
 class FilterTest : public testing::Test {
  public:
-  FilterTest():
-      codec_(new MockHTTPCodec()),
-      chain_(unique_ptr<HTTPCodec>(codec_)) {
+  FilterTest()
+      : codec_(new MockHTTPCodec()), chain_(unique_ptr<HTTPCodec>(codec_)) {
     EXPECT_CALL(*codec_, setCallback(_))
-      .WillRepeatedly(SaveArg<0>(&callbackStart_));
+        .WillRepeatedly(SaveArg<0>(&callbackStart_));
     chain_.setCallback(&callback_);
   }
- protected:
 
+ protected:
   MockHTTPCodec* codec_;
   HTTPCodec::Callback* callbackStart_;
   HTTPCodecFilterChain chain_;
@@ -49,7 +47,7 @@ class FilterTest : public testing::Test {
   folly::IOBufQueue writeBuf_{folly::IOBufQueue::cacheChainLength()};
 };
 
-class HTTPChecksTest: public FilterTest {
+class HTTPChecksTest : public FilterTest {
  public:
   void SetUp() override {
     chain_.add<HTTPChecks>();
@@ -57,21 +55,21 @@ class HTTPChecksTest: public FilterTest {
 };
 
 template <int initSize>
-class FlowControlFilterTest: public FilterTest {
+class FlowControlFilterTest : public FilterTest {
  public:
   void SetUp() override {
     EXPECT_CALL(*codec_, getDefaultWindowSize())
-      .WillRepeatedly(Return(kInitialCapacity));
+        .WillRepeatedly(Return(kInitialCapacity));
 
     if (initSize > kInitialCapacity) {
       // If the initial size is bigger than the default, a window update
       // will immediately be generated
-      EXPECT_CALL(*codec_, generateWindowUpdate(_, 0, initSize -
-                                                kInitialCapacity))
-        .WillOnce(InvokeWithoutArgs([this] () {
-              writeBuf_.append(makeBuf(10));
-              return 10;
-            }));
+      EXPECT_CALL(*codec_,
+                  generateWindowUpdate(_, 0, initSize - kInitialCapacity))
+          .WillOnce(InvokeWithoutArgs([this]() {
+            writeBuf_.append(makeBuf(10));
+            return 10;
+          }));
     }
     EXPECT_CALL(*codec_, generateBody(_, _, _, _, _))
         .WillRepeatedly(Invoke([](folly::IOBufQueue& writeBuf,
@@ -87,8 +85,7 @@ class FlowControlFilterTest: public FilterTest {
 
     // Construct flow control filter with capacity of 0, which will be
     // overridden to the codec default, which is the minimum
-    filter_ = new FlowControlFilter(flowCallback_, writeBuf_, codec_,
-                                    initSize);
+    filter_ = new FlowControlFilter(flowCallback_, writeBuf_, codec_, initSize);
     chain_.addFilters(std::unique_ptr<FlowControlFilter>(filter_));
   }
   StrictMock<MockFlowControlCallback> flowCallback_;
@@ -101,9 +98,8 @@ using BigWindow = FlowControlFilterTest<1000000>;
 
 MATCHER(IsFlowException, "") {
   return arg->hasCodecStatusCode() &&
-    arg->getCodecStatusCode() == ErrorCode::FLOW_CONTROL_ERROR &&
-    !arg->hasHttpStatusCode() &&
-    !arg->hasProxygenError();
+         arg->getCodecStatusCode() == ErrorCode::FLOW_CONTROL_ERROR &&
+         !arg->hasHttpStatusCode() && !arg->hasProxygenError();
 }
 
 TEST_F(DefaultFlowControl, FlowControlConstruct) {
@@ -114,9 +110,8 @@ TEST_F(DefaultFlowControl, FlowControlConstruct) {
   ASSERT_EQ(writeBuf_.chainLength(), 0);
 
   // Our send window is limited to kInitialCapacity
-  chain_->generateBody(writeBuf_, 1,
-                       makeBuf(kInitialCapacity - 1),
-                       HTTPCodec::NoPadding, false);
+  chain_->generateBody(
+      writeBuf_, 1, makeBuf(kInitialCapacity - 1), HTTPCodec::NoPadding, false);
 
   // the window isn't full yet, so getting a window update shouldn't give a
   // callback informing us that it is open again
@@ -130,24 +125,23 @@ TEST_F(DefaultFlowControl, FlowControlConstruct) {
   callbackStart_->onWindowUpdate(0, 1);
 
   // Overflowing the window is fatal. Write 2 bytes (only 1 byte left in window)
-  EXPECT_DEATH_NO_CORE(chain_->generateBody(writeBuf_, 1, makeBuf(2),
-                                            HTTPCodec::NoPadding, false),
-                       ".*");
+  EXPECT_DEATH_NO_CORE(
+      chain_->generateBody(
+          writeBuf_, 1, makeBuf(2), HTTPCodec::NoPadding, false),
+      ".*");
 }
 
 TEST_F(DefaultFlowControl, SendUpdate) {
   // Make sure we send a window update when the window decreases below half
   InSequence enforceSequence;
-  EXPECT_CALL(callback_, onBody(_, _, _))
-    .WillRepeatedly(Return());
+  EXPECT_CALL(callback_, onBody(_, _, _)).WillRepeatedly(Return());
 
   // Have half the window outstanding
   callbackStart_->onBody(1, makeBuf(kInitialCapacity / 2 + 1), 0);
   filter_->ingressBytesProcessed(writeBuf_, kInitialCapacity / 2);
 
   // It should wait until the "+1" is ack'd to generate the coallesced update
-  EXPECT_CALL(*codec_,
-              generateWindowUpdate(_, 0, kInitialCapacity / 2 + 1));
+  EXPECT_CALL(*codec_, generateWindowUpdate(_, 0, kInitialCapacity / 2 + 1));
   filter_->ingressBytesProcessed(writeBuf_, 1);
 }
 
@@ -186,9 +180,11 @@ TEST_F(BigWindow, RemoteIncrease) {
   ASSERT_EQ(filter_->getAvailableSend(), kInitialCapacity + 10);
 
   EXPECT_CALL(flowCallback_, onConnectionSendWindowClosed());
-  chain_->generateBody(writeBuf_, 1,
+  chain_->generateBody(writeBuf_,
+                       1,
                        makeBuf(kInitialCapacity + 10),
-                       HTTPCodec::NoPadding, false);
+                       HTTPCodec::NoPadding,
+                       false);
   ASSERT_EQ(filter_->getAvailableSend(), 0);
 
   // Now the remote side sends a HUGE update (just barely legal)
@@ -237,15 +233,13 @@ TEST_F(HTTPChecksTest, RecvTraceBody) {
   // In proxygen, we deal with receiving a TRACE with a body by 400'ing it
 
   EXPECT_CALL(callback_, onError(_, _, _))
-    .WillOnce(Invoke([] (HTTPCodec::StreamID,
-                         std::shared_ptr<HTTPException> exc,
-                         bool newTxn) {
-                       ASSERT_TRUE(newTxn);
-                       ASSERT_EQ(exc->getHttpStatusCode(), 400);
-                       ASSERT_EQ(0,
-                         strcmp("RFC2616: Request Body Not Allowed",
-                                exc->what()));
-        }));
+      .WillOnce(Invoke([](HTTPCodec::StreamID,
+                          std::shared_ptr<HTTPException> exc,
+                          bool newTxn) {
+        ASSERT_TRUE(newTxn);
+        ASSERT_EQ(exc->getHttpStatusCode(), 400);
+        ASSERT_EQ(0, strcmp("RFC2616: Request Body Not Allowed", exc->what()));
+      }));
 
   auto msg = makePostRequest();
   msg->setMethod("TRACE");

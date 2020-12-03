@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/ScopeGuard.h>
@@ -63,7 +62,7 @@ namespace proxygen {
  */
 class ResponseBuilder {
  public:
-  explicit ResponseBuilder(ResponseHandler* txn): txn_(txn) {
+  explicit ResponseBuilder(ResponseHandler* txn) : txn_(txn) {
   }
 
   ResponseBuilder& promise(const std::string& url, const std::string& host) {
@@ -138,7 +137,9 @@ class ResponseBuilder {
 
   void send() {
     // Once we send them, we don't want to send them again
-    SCOPE_EXIT { headers_.reset(); };
+    SCOPE_EXIT {
+      headers_.reset();
+    };
 
     // By default, chunked
     bool chunked = true;
@@ -155,9 +156,8 @@ class ResponseBuilder {
           headers_->setIsChunked(true);
         } else {
           const auto len = body_ ? body_->computeChainDataLength() : 0;
-          headers_->getHeaders().add(
-              HTTP_HEADER_CONTENT_LENGTH,
-              folly::to<std::string>(len));
+          headers_->getHeaders().add(HTTP_HEADER_CONTENT_LENGTH,
+                                     folly::to<std::string>(len));
         }
       }
 
@@ -217,6 +217,10 @@ class ResponseBuilder {
     return *this;
   }
 
+  const HTTPMessage* getHeaders() const {
+    return headers_.get();
+  }
+
  private:
   ResponseHandler* const txn_{nullptr};
 
@@ -228,4 +232,4 @@ class ResponseBuilder {
   bool sendEOM_{false};
 };
 
-}
+} // namespace proxygen

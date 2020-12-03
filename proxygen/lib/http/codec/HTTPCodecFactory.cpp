@@ -1,21 +1,20 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/HTTPCodecFactory.h>
 #include <proxygen/lib/http/codec/HTTP1xCodec.h>
-#include <proxygen/lib/http/codec/SPDYCodec.h>
 #include <proxygen/lib/http/codec/HTTP2Codec.h>
+#include <proxygen/lib/http/codec/SPDYCodec.h>
 
 namespace proxygen {
 
 std::unique_ptr<HTTPCodec> HTTPCodecFactory::getCodec(
-  CodecProtocol protocol, TransportDirection direction) {
+    CodecProtocol protocol, TransportDirection direction) {
   switch (protocol) {
     case CodecProtocol::HTTP_1_1:
       return std::make_unique<HTTP1xCodec>(direction);
@@ -31,4 +30,4 @@ std::unique_ptr<HTTPCodec> HTTPCodecFactory::getCodec(
   }
 }
 
-}
+} // namespace proxygen

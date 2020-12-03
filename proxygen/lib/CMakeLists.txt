@@ -1,9 +1,8 @@
-# Copyright (c) 2019-present, Facebook, Inc.
+# Copyright (c) Facebook, Inc. and its affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree. An additional grant
-# of patent rights can be found in the PATENTS file in the same directory.
+# LICENSE file in the root directory of this source tree.
 
 file(
     MAKE_DIRECTORY
@@ -13,30 +12,19 @@ file(
 
 add_custom_command(
     OUTPUT ${PROXYGEN_GENERATED_ROOT}/proxygen/lib/http/HTTPCommonHeaders.h
-    COMMAND
-        ${CMAKE_CURRENT_SOURCE_DIR}/http/gen_HTTPCommonHeaders.h.sh
-        ${CMAKE_CURRENT_SOURCE_DIR}/http/HTTPCommonHeaders.txt
-        ${PROXYGEN_FBCODE_ROOT}
-        ${PROXYGEN_GENERATED_ROOT}/proxygen/lib/http
-    DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/http/gen_HTTPCommonHeaders.h.sh
-        ${CMAKE_CURRENT_SOURCE_DIR}/http/HTTPCommonHeaders.template.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/http/HTTPCommonHeaders.txt
-    COMMENT "Generating HTTPCommonHeaders.h"
-)
-add_custom_command(
     OUTPUT ${PROXYGEN_GENERATED_ROOT}/proxygen/lib/http/HTTPCommonHeaders.cpp
     COMMAND
-        ${CMAKE_CURRENT_SOURCE_DIR}/http/gen_HTTPCommonHeaders.cpp.sh
+        ${CMAKE_CURRENT_SOURCE_DIR}/http/gen_HTTPCommonHeaders.sh
         ${CMAKE_CURRENT_SOURCE_DIR}/http/HTTPCommonHeaders.txt
         ${PROXYGEN_FBCODE_ROOT}
         ${PROXYGEN_GENERATED_ROOT}/proxygen/lib/http
-        ${PROXYGEN_GPERF}
     DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/http/gen_HTTPCommonHeaders.h.sh
-        ${CMAKE_CURRENT_SOURCE_DIR}/http/HTTPCommonHeaders.template.gperf
+        ${CMAKE_CURRENT_SOURCE_DIR}/http/gen_HTTPCommonHeaders.sh
         ${CMAKE_CURRENT_SOURCE_DIR}/http/HTTPCommonHeaders.txt
-    COMMENT "Generating HTTPCommonHeaders.cpp"
+        ${CMAKE_CURRENT_SOURCE_DIR}/utils/gen_perfect_hash_table.sh
+        ${CMAKE_CURRENT_SOURCE_DIR}/utils/perfect_hash_table_template.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/utils/perfect_hash_table_template.cpp.gperf
+    COMMENT "Generating HTTPCommonHeaders.h and HTTPCommonHeaders.cpp"
 )
 add_custom_command(
     OUTPUT
@@ -83,6 +71,7 @@ if (BUILD_QUIC)
         http/codec/HQUnidirectionalCodec.cpp
         http/codec/HQUtils.cpp
         http/codec/UnframedBodyOffsetTracker.cpp
+        http/session/HQByteEventTracker.cpp
         http/session/HQDownstreamSession.cpp
         http/session/HQSession.cpp
         http/session/HQStreamBase.cpp
@@ -95,6 +84,7 @@ if (BUILD_QUIC)
       ${HTTP3_DEPEND_LIBS}
       mvfst::mvfst_transport
       mvfst::mvfst_client
+      mvfst::mvfst_fizz_client
       mvfst::mvfst_server
       mvfst::mvfst_codec_types
       mvfst::mvfst_state_machine
@@ -102,7 +92,7 @@ if (BUILD_QUIC)
 endif()
 
 add_library(
-    proxygen STATIC
+    proxygen
     healthcheck/ServerHealthCheckerCallback.cpp
     http/codec/CodecProtocol.cpp
     http/codec/CodecUtil.cpp
@@ -157,8 +147,11 @@ add_library(
     http/HTTPException.cpp
     http/HTTPHeaders.cpp
     http/HTTPMessage.cpp
+    http/HTTPMessageFilters.cpp
     http/HTTPMethod.cpp
+    http/StatusTypeEnum.cpp
     http/ProxygenErrorEnum.cpp
+    http/ProxyStatus.cpp
     http/RFC2616.cpp
     http/session/ByteEvents.cpp
     http/session/ByteEventTracker.cpp
@@ -178,7 +171,6 @@ add_library(
     http/session/HTTPUpstreamSession.cpp
     http/session/SecondaryAuthManager.cpp
     http/session/SimpleController.cpp
-    http/session/TransportFilter.cpp
     http/structuredheaders/StructuredHeadersBuffer.cpp
     http/structuredheaders/StructuredHeadersDecoder.cpp
     http/structuredheaders/StructuredHeadersEncoder.cpp
@@ -189,7 +181,7 @@ add_library(
     services/RequestWorkerThread.cpp
     services/Service.cpp
     services/WorkerThread.cpp
-    statistics/ResourceStats.cpp
+    stats/ResourceStats.cpp
     transport/PersistentFizzPskCache.cpp
     utils/AsyncTimeoutSet.cpp
     utils/Base64.cpp
@@ -205,6 +197,7 @@ add_library(
     utils/WheelTimerInstance.cpp
     utils/ZlibStreamCompressor.cpp
     utils/ZlibStreamDecompressor.cpp
+    utils/ZstdStreamCompressor.cpp
     utils/ZstdStreamDecompressor.cpp
     ${HTTP3_SOURCES}
     ${PROXYGEN_GENERATED_ROOT}/proxygen/lib/http/HTTPCommonHeaders.cpp
@@ -228,14 +221,19 @@ target_compile_options(
     ${_PROXYGEN_COMMON_COMPILE_OPTIONS}
 )
 
+if (BUILD_SHARED_LIBS)
+    set_property(TARGET proxygen PROPERTY POSITION_INDEPENDENT_CODE ON)
+endif()
+
 target_link_libraries(
     proxygen PUBLIC
     Folly::folly
     fizz::fizz
     wangle::wangle
-    zstd::zstd
+    zstd
     Boost::boost
     Boost::iostreams
+    -lz
     ${HTTP3_DEPEND_LIBS}
 )
 

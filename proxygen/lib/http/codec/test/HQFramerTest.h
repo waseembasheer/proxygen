@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/io/IOBufQueue.h>
@@ -19,9 +18,10 @@ size_t writeFrameHeaderManual(folly::IOBufQueue& queue,
                               uint64_t decodedType,
                               uint64_t decodedLength) {
   folly::io::QueueAppender appender(&queue, proxygen::hq::kMaxFrameHeaderSize);
-  auto typeRes = quic::encodeQuicInteger(decodedType, appender);
+  auto appenderOp = [&](auto val) { appender.writeBE(val); };
+  auto typeRes = quic::encodeQuicInteger(decodedType, appenderOp);
   CHECK(typeRes.hasValue());
-  auto lengthRes = quic::encodeQuicInteger(decodedLength, appender);
+  auto lengthRes = quic::encodeQuicInteger(decodedLength, appenderOp);
   CHECK(lengthRes.hasValue());
   return *typeRes + *lengthRes;
 }
@@ -29,18 +29,6 @@ size_t writeFrameHeaderManual(folly::IOBufQueue& queue,
 // Write a valid frame for each frame type
 void writeValidFrame(folly::IOBufQueue& queue, proxygen::hq::FrameType type) {
   switch (type) {
-    case proxygen::hq::FrameType::PRIORITY:
-      proxygen::hq::writePriority(
-          queue,
-          {
-              proxygen::hq::PriorityElementType::REQUEST_STREAM,
-              proxygen::hq::PriorityElementType::REQUEST_STREAM,
-              true,
-              123,
-              234,
-              30,
-          });
-      break;
     case proxygen::hq::FrameType::SETTINGS:
       proxygen::hq::writeSettings(
           queue,
@@ -65,7 +53,8 @@ void writeValidFrame(folly::IOBufQueue& queue, proxygen::hq::FrameType type) {
                          ? maybeDataSize
                          : 0));
       folly::io::QueueAppender appender(&queue, *idSize);
-      quic::encodeQuicInteger(id, appender);
+      auto appenderOp = [&](auto val) { appender.writeBE(val); };
+      quic::encodeQuicInteger(id, appenderOp);
       if (type == proxygen::hq::FrameType::PUSH_PROMISE) {
         // header data for push-promise
         uint8_t simplePushPromise[] = {0x00, 0x00, 0xC0, 0xC1, 0xD1, 0xD7};

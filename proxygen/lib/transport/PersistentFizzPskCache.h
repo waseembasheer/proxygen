@@ -1,24 +1,20 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <fizz/client/PskCache.h>
+#include <fizz/client/PskSerializationUtils.h>
 #include <fizz/protocol/Factory.h>
 #include <fizz/protocol/OpenSSLFactory.h>
 #include <wangle/client/persistence/FilePersistentCache.h>
 
 namespace proxygen {
-
-std::string serializePsk(const fizz::client::CachedPsk& psk);
-fizz::client::CachedPsk deserializePsk(const std::string& str,
-                                       const fizz::Factory& factory);
 
 struct PersistentCachedPsk {
   std::string serialized;
@@ -45,7 +41,8 @@ class PersistentFizzPskCache : public fizz::client::PskCache {
     auto serialized = cache_.get(identity);
     if (serialized) {
       try {
-        auto deserialized = deserializePsk(serialized->serialized, *factory_);
+        auto deserialized =
+            fizz::client::deserializePsk(serialized->serialized, *factory_);
         serialized->uses++;
         if (maxPskUses_ != 0 && serialized->uses >= maxPskUses_) {
           cache_.remove(identity);
@@ -64,7 +61,7 @@ class PersistentFizzPskCache : public fizz::client::PskCache {
   void putPsk(const std::string& identity,
               fizz::client::CachedPsk psk) override {
     PersistentCachedPsk serialized;
-    serialized.serialized = serializePsk(psk);
+    serialized.serialized = fizz::client::serializePsk(psk);
     serialized.uses = 0;
     cache_.put(identity, std::move(serialized));
   }

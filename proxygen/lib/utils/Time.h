@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <algorithm>
@@ -42,59 +41,65 @@ inline std::chrono::time_point<ClockType> getCurrentTime() {
   return ClockType::now();
 }
 
-inline std::chrono::system_clock::time_point
-toSystemTimePoint(TimePoint t) {
+inline std::chrono::system_clock::time_point toSystemTimePoint(TimePoint t) {
   return std::chrono::system_clock::now() +
-    std::chrono::duration_cast<std::chrono::system_clock::duration>(
-      t - SteadyClock::now());
+         std::chrono::duration_cast<std::chrono::system_clock::duration>(
+             t - SteadyClock::now());
 }
 
 inline time_t toTimeT(TimePoint t) {
   return std::chrono::system_clock::to_time_t(toSystemTimePoint(t));
 }
 
+inline std::chrono::microseconds microsecondsSinceEpoch() {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::system_clock::now().time_since_epoch());
+}
+
 inline std::chrono::milliseconds millisecondsSinceEpoch() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
-    std::chrono::system_clock::now().time_since_epoch());
+      std::chrono::system_clock::now().time_since_epoch());
 }
 
 inline std::chrono::seconds secondsSinceEpoch() {
   return std::chrono::duration_cast<std::chrono::seconds>(
-    std::chrono::system_clock::now().time_since_epoch());
+      std::chrono::system_clock::now().time_since_epoch());
+}
+
+inline std::chrono::microseconds microsecondsSinceEpoch(TimePoint t) {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+      toSystemTimePoint(t).time_since_epoch());
 }
 
 inline std::chrono::milliseconds millisecondsSinceEpoch(TimePoint t) {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
-    toSystemTimePoint(t).time_since_epoch());
+      toSystemTimePoint(t).time_since_epoch());
 }
 
 inline std::chrono::seconds secondsSinceEpoch(TimePoint t) {
   return std::chrono::duration_cast<std::chrono::seconds>(
-    toSystemTimePoint(t).time_since_epoch());
+      toSystemTimePoint(t).time_since_epoch());
 }
 
 template <typename ClockType = SteadyClock>
 inline std::chrono::microseconds microsecondsBetween(
     std::chrono::time_point<ClockType> finish,
     std::chrono::time_point<ClockType> start) {
-  return std::chrono::duration_cast<std::chrono::microseconds>(
-    finish - start);
+  return std::chrono::duration_cast<std::chrono::microseconds>(finish - start);
 }
 
 template <typename ClockType = SteadyClock>
 inline std::chrono::milliseconds millisecondsBetween(
     std::chrono::time_point<ClockType> finish,
     std::chrono::time_point<ClockType> start) {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-    finish - start);
+  return std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
 }
 
 template <typename ClockType = SteadyClock>
 inline std::chrono::seconds secondsBetween(
     std::chrono::time_point<ClockType> finish,
     std::chrono::time_point<ClockType> start) {
-  return std::chrono::duration_cast<std::chrono::seconds>(
-    finish - start);
+  return std::chrono::duration_cast<std::chrono::seconds>(finish - start);
 }
 
 template <typename ClockType = SteadyClock>
@@ -138,7 +143,7 @@ inline void getDateOffsetStr(char datebuf[32], int dayOffset) {
  * Helper method to convert TimePoint to a printable date and time string. It
  * will convert static time to system time.
  *
- * @param time    TimePoint
+ * @param tp      TimePoint
  * @return        a human readable date and time string at UTC timezone.
  *                If there is any error, returns empty string.
  */
@@ -169,7 +174,8 @@ std::string getDateTimeStr(const ASN1_TIME* const time);
 template <typename ClockType = SteadyClock>
 class TimeUtilGeneric {
  public:
-  virtual ~TimeUtilGeneric() {}
+  virtual ~TimeUtilGeneric() {
+  }
 
   virtual std::chrono::time_point<ClockType> now() const {
     return getCurrentTime<ClockType>();
@@ -187,10 +193,14 @@ class TimeUtilGeneric {
   virtual uint64_t msSinceEpoch() {
     return millisecondsSinceEpoch().count();
   }
+
+  virtual uint64_t microsSinceEpoch() {
+    return microsecondsSinceEpoch().count();
+  }
 };
 
 // Typedef so as to not disrupting callers who use 'TimeUtil' before we
 // made it TimeUtilGeneric
 using TimeUtil = TimeUtilGeneric<>;
 
-}
+} // namespace proxygen

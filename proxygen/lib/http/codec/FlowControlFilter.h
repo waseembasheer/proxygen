@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/lib/http/Window.h>
@@ -23,12 +22,12 @@ namespace proxygen {
  * control. Not every codec is interested in per-session flow control, so
  * this filter can only be added in that case or else it is an error.
  */
-class FlowControlFilter:
-      public PassThroughHTTPCodecFilter {
+class FlowControlFilter : public PassThroughHTTPCodecFilter {
  public:
   class Callback {
    public:
-    virtual ~Callback() {}
+    virtual ~Callback() {
+    }
     /**
      * Notification channel to alert when the send window state changes.
      */
@@ -48,11 +47,10 @@ class FlowControlFilter:
    *                     will generate an immediate window update into
    *                     writeBuf. 0 means use the codec default.
    */
-  explicit
-  FlowControlFilter(Callback& callback,
-                    folly::IOBufQueue& writeBuf,
-                    HTTPCodec* codec,
-                    uint32_t recvCapacity = 0);
+  explicit FlowControlFilter(Callback& callback,
+                             folly::IOBufQueue& writeBuf,
+                             HTTPCodec* codec,
+                             uint32_t recvCapacity = 0);
 
   /**
    * Modify the session receive window
@@ -84,7 +82,8 @@ class FlowControlFilter:
 
   bool isReusable() const override;
 
-  void onBody(StreamID stream, std::unique_ptr<folly::IOBuf> chain,
+  void onBody(StreamID stream,
+              std::unique_ptr<folly::IOBuf> chain,
               uint16_t padding) override;
 
   void onWindowUpdate(StreamID stream, uint32_t amount) override;
@@ -99,14 +98,21 @@ class FlowControlFilter:
                               StreamID stream,
                               uint32_t delta) override;
 
- private:
+  const Window& getSendWindow() const {
+    return sendWindow_;
+  }
 
+  const Window& getRecvWindow() const {
+    return recvWindow_;
+  }
+
+ private:
   Callback& notify_;
   Window recvWindow_;
   Window sendWindow_;
   int32_t toAck_{0};
-  bool error_:1;
-  bool sendsBlocked_:1;
+  bool error_ : 1;
+  bool sendsBlocked_ : 1;
 };
 
-}
+} // namespace proxygen

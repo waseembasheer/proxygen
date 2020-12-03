@@ -1,11 +1,9 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 #include "ZstdStreamDecompressor.h"
@@ -33,11 +31,12 @@ std::unique_ptr<folly::IOBuf> ZstdStreamDecompressor::decompress(
     return nullptr;
   }
 
-  const size_t outBufMinSize = 1; // avoid wasting space in existing bufs
   const size_t outBufAllocSize = ZSTD_DStreamOutSize();
-  folly::IOBufQueue outqueue;
 
-  for (const folly::ByteRange range : *in) {
+  auto out = folly::IOBuf::create(outBufAllocSize);
+  auto appender = folly::io::Appender(out.get(), outBufAllocSize);
+
+  for (const folly::ByteRange& range : *in) {
     if (range.data() == nullptr) {
       continue;
     }
@@ -45,8 +44,10 @@ std::unique_ptr<folly::IOBuf> ZstdStreamDecompressor::decompress(
     ZSTD_inBuffer ibuf = {range.data(), range.size(), 0};
     while (ibuf.pos < ibuf.size) {
       status_ = ZstdStatusType::CONTINUE;
-      auto outpair = outqueue.preallocate(outBufMinSize, outBufAllocSize);
-      ZSTD_outBuffer obuf = {outpair.first, outpair.second, 0};
+      appender.ensure(outBufAllocSize);
+      DCHECK_GT(appender.length(), 0);
+
+      ZSTD_outBuffer obuf = {appender.writableData(), appender.length(), 0};
       auto ret = ZSTD_decompressStream(dctx_.get(), &obuf, &ibuf);
       if (ZSTD_isError(ret)) {
         status_ = ZstdStatusType::ERROR;
@@ -54,10 +55,11 @@ std::unique_ptr<folly::IOBuf> ZstdStreamDecompressor::decompress(
       } else if (ret == 0) {
         status_ = ZstdStatusType::FINISHED;
       }
-      outqueue.postallocate(obuf.pos);
+
+      appender.append(obuf.pos);
     }
   }
 
-  return outqueue.move();
+  return out;
 }
 } // namespace proxygen

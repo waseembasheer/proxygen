@@ -1,15 +1,14 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
+#include <proxygen/lib/utils/PerfectIndexMap.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/HTTPCommonHeaders.h>
-#include <proxygen/lib/utils/PerfectIndexMap.h>
 #include <string>
 
 using namespace folly;
@@ -19,15 +18,14 @@ using namespace proxygen;
 // single template parameter to our test fixture.  Thus in this case our single
 // test parameter contains the type and value information required to
 // instantiate the map under test correctly.
-template <
-  typename Key,
-  Key OtherKey,
-  Key NoneKey,
-  Key (*PerfectHashStrToKey)(const std::string&),
-  bool AllowDuplicates,
-  bool CaseInsensitive,
-  uint8_t KeyCommonOffset,
-  uint64_t NumKeys>
+template <typename Key,
+          Key OtherKey,
+          Key NoneKey,
+          Key (*PerfectHashStrToKey)(const std::string&),
+          bool AllowDuplicates,
+          bool CaseInsensitive,
+          uint8_t KeyCommonOffset,
+          uint64_t NumKeys>
 struct PerfectIndexMapTestsTemplateParams {
   typedef Key TKey;
   static const Key TOtherKey = OtherKey;
@@ -38,7 +36,7 @@ struct PerfectIndexMapTestsTemplateParams {
   // Pass through wrapper for the hashing method.
   // This method only exists because am unsure how to properly capture it and
   // expose it as a subsequent template parameter for consumers.
-  static Key Hash(const std::string& name){
+  static Key Hash(const std::string& name) {
     return PerfectHashStrToKey(name);
   }
 
@@ -48,58 +46,53 @@ struct PerfectIndexMapTestsTemplateParams {
 
 // Wrapper test class allowing us to create the desired PerfectIndexMap via
 // the specified template parameter
-template<class T>
+template <class T>
 class PerfectIndexMapTests : public testing::Test {
  protected:
-  PerfectIndexMap<
-      typename T::TKey,
-      T::TOtherKey,
-      T::TNoneKey,
-      T::Hash,
-      T::TAllowDuplicates,
-      T::TCaseInsensitive>
-    testMap_;
+  PerfectIndexMap<typename T::TKey,
+                  T::TOtherKey,
+                  T::TNoneKey,
+                  T::Hash,
+                  T::TAllowDuplicates,
+                  T::TCaseInsensitive>
+      testMap_;
 };
 
 // Register the template configurations we wish to automatically test
 typedef testing::Types<
-    PerfectIndexMapTestsTemplateParams<
-      HTTPHeaderCode,
-      HTTP_HEADER_OTHER,
-      HTTP_HEADER_NONE,
-      HTTPCommonHeaders::hash,
-      false,
-      true,
-      HTTPHeaderCodeCommonOffset,
-      HTTPCommonHeaders::num_header_codes>,
-    PerfectIndexMapTestsTemplateParams<
-      HTTPHeaderCode,
-      HTTP_HEADER_OTHER,
-      HTTP_HEADER_NONE,
-      HTTPCommonHeaders::hash,
-      true,
-      true,
-      HTTPHeaderCodeCommonOffset,
-      HTTPCommonHeaders::num_header_codes>,
-    PerfectIndexMapTestsTemplateParams<
-      HTTPHeaderCode,
-      HTTP_HEADER_OTHER,
-      HTTP_HEADER_NONE,
-      HTTPCommonHeaders::hash,
-      true,
-      false,
-      HTTPHeaderCodeCommonOffset,
-      HTTPCommonHeaders::num_header_codes>,
-    PerfectIndexMapTestsTemplateParams<
-      HTTPHeaderCode,
-      HTTP_HEADER_OTHER,
-      HTTP_HEADER_NONE,
-      HTTPCommonHeaders::hash,
-      false,
-      false,
-      HTTPHeaderCodeCommonOffset,
-      HTTPCommonHeaders::num_header_codes>
-  > TestTypes;
+    PerfectIndexMapTestsTemplateParams<HTTPHeaderCode,
+                                       HTTP_HEADER_OTHER,
+                                       HTTP_HEADER_NONE,
+                                       HTTPCommonHeaders::hash,
+                                       false,
+                                       true,
+                                       HTTPHeaderCodeCommonOffset,
+                                       HTTPCommonHeaders::num_codes>,
+    PerfectIndexMapTestsTemplateParams<HTTPHeaderCode,
+                                       HTTP_HEADER_OTHER,
+                                       HTTP_HEADER_NONE,
+                                       HTTPCommonHeaders::hash,
+                                       true,
+                                       true,
+                                       HTTPHeaderCodeCommonOffset,
+                                       HTTPCommonHeaders::num_codes>,
+    PerfectIndexMapTestsTemplateParams<HTTPHeaderCode,
+                                       HTTP_HEADER_OTHER,
+                                       HTTP_HEADER_NONE,
+                                       HTTPCommonHeaders::hash,
+                                       true,
+                                       false,
+                                       HTTPHeaderCodeCommonOffset,
+                                       HTTPCommonHeaders::num_codes>,
+    PerfectIndexMapTestsTemplateParams<HTTPHeaderCode,
+                                       HTTP_HEADER_OTHER,
+                                       HTTP_HEADER_NONE,
+                                       HTTPCommonHeaders::hash,
+                                       false,
+                                       false,
+                                       HTTPHeaderCodeCommonOffset,
+                                       HTTPCommonHeaders::num_codes>>
+    TestTypes;
 TYPED_TEST_CASE(PerfectIndexMapTests, TestTypes);
 
 TYPED_TEST(PerfectIndexMapTests, BasicKeySetAddRemoveGetSingleOrNone) {
@@ -133,8 +126,8 @@ TYPED_TEST(PerfectIndexMapTests, BasicKeySetAddRemoveGetSingleOrNone) {
   EXPECT_EQ(this->testMap_.size(), --numInserted);
 
   // Verify the integrity of the map
-  for (uint64_t j = TypeParam::TKeyCommonOffset + 1;
-       j < TypeParam::TNumKeys; ++j) {
+  for (uint64_t j = TypeParam::TKeyCommonOffset + 1; j < TypeParam::TNumKeys;
+       ++j) {
     key = static_cast<Key>(j);
     auto optional = this->testMap_.getSingleOrNone(key);
     ASSERT_TRUE(optional.hasValue());
@@ -195,14 +188,14 @@ TYPED_TEST(PerfectIndexMapTests, OtherStringCaseSensitivity) {
   folly::Optional<std::string> optional;
   if (TypeParam::TCaseInsensitive) {
     optional = this->testMap_.getSingleOrNone(modTestString);
-    ASSERT_TRUE(optional.hasValue());
+    ASSERT_TRUE(optional.has_value());
     ASSERT_EQ(optional.value(), testString);
 
     this->testMap_.set(modTestString, modTestString);
     EXPECT_EQ(this->testMap_.size(), currentCount);
 
     optional = this->testMap_.getSingleOrNone(testString);
-    ASSERT_TRUE(optional.hasValue());
+    ASSERT_TRUE(optional.has_value());
     ASSERT_EQ(optional.value(), modTestString);
   } else {
     this->testMap_.set(modTestString, modTestString);
@@ -212,11 +205,11 @@ TYPED_TEST(PerfectIndexMapTests, OtherStringCaseSensitivity) {
     EXPECT_EQ(this->testMap_.size(), currentCount);
 
     optional = this->testMap_.getSingleOrNone(testString);
-    ASSERT_TRUE(optional.hasValue());
+    ASSERT_TRUE(optional.has_value());
     ASSERT_EQ(optional.value(), testString);
 
     optional = this->testMap_.getSingleOrNone(modTestString);
-    ASSERT_TRUE(optional.hasValue());
+    ASSERT_TRUE(optional.has_value());
     ASSERT_EQ(optional.value(), modTestString);
   }
 
@@ -225,7 +218,7 @@ TYPED_TEST(PerfectIndexMapTests, OtherStringCaseSensitivity) {
     this->testMap_.add(addModTestString, addModTestString);
     optional = this->testMap_.getSingleOrNone(testString);
     if (TypeParam::TCaseInsensitive) {
-      EXPECT_FALSE(optional.hasValue());
+      EXPECT_FALSE(optional.has_value());
     } else {
       EXPECT_TRUE(optional.has_value());
     }

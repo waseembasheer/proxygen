@@ -1,17 +1,18 @@
 /*
- *  Copyright (c) 2004-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/HQConnector.h>
+#include <folly/io/SocketOptionMap.h>
 #include <folly/io/async/AsyncSSLSocket.h>
 #include <proxygen/lib/http/session/HQSession.h>
 #include <quic/api/QuicSocket.h>
 #include <quic/congestion_control/CongestionControllerFactory.h>
+#include <quic/fizz/client/handshake/FizzClientQuicHandshakeContext.h>
 
 using namespace folly;
 using namespace std;
@@ -46,31 +47,42 @@ void HQConnector::setQuicPskCache(
 
 void HQConnector::connect(
     EventBase* eventBase,
+    folly::Optional<folly::SocketAddress> localAddr,
     const folly::SocketAddress& connectAddr,
     std::shared_ptr<const FizzClientContext> fizzContext,
     std::shared_ptr<const fizz::CertificateVerifier> verifier,
     std::chrono::milliseconds connectTimeout,
-    const AsyncSocket::OptionMap& /* socketOptions */,
+    const SocketOptionMap& socketOptions,
     folly::Optional<std::string> sni,
     std::shared_ptr<quic::Logger> logger,
     std::shared_ptr<quic::QLogger> qLogger,
-    std::shared_ptr<quic::LoopDetectorCallback> quicLoopDetectorCallback) {
+    std::shared_ptr<quic::LoopDetectorCallback> quicLoopDetectorCallback,
+    std::shared_ptr<quic::QuicTransportStatsCallback>
+        quicTransportStatsCallback) {
 
   DCHECK(!isBusy());
   auto sock = std::make_unique<folly::AsyncUDPSocket>(eventBase);
-  auto quicClient =
-      quic::QuicClientTransport::newClient(eventBase, std::move(sock));
-  quicClient->setFizzClientContext(fizzContext);
-  quicClient->setCertificateVerifier(std::move(verifier));
+  auto quicClient = quic::QuicClientTransport::newClient(
+      eventBase,
+      std::move(sock),
+      quic::FizzClientQuicHandshakeContext::Builder()
+          .setFizzClientContext(fizzContext)
+          .setCertificateVerifier(std::move(verifier))
+          .setPskCache(quicPskCache_)
+          .build());
   quicClient->setHostname(sni.value_or(connectAddr.getAddressStr()));
   quicClient->addNewPeerAddress(connectAddr);
+  if (localAddr.hasValue()) {
+    quicClient->setLocalAddress(*localAddr);
+  }
   quicClient->setCongestionControllerFactory(
       std::make_shared<quic::DefaultCongestionControllerFactory>());
   quicClient->setTransportSettings(transportSettings_);
-  quicClient->setPskCache(quicPskCache_);
   quicClient->setLogger(std::move(logger));
   quicClient->setQLogger(std::move(qLogger));
   quicClient->setLoopDetectorCallback(std::move(quicLoopDetectorCallback));
+  quicClient->setTransportStatsCallback(std::move(quicTransportStatsCallback));
+  quicClient->setSocketOptions(socketOptions);
   session_ = new proxygen::HQUpstreamSession(transactionTimeout_,
                                              connectTimeout,
                                              nullptr, // controller

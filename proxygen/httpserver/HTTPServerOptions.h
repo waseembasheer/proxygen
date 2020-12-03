@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/Function.h>
@@ -32,7 +31,7 @@ class HTTPServerOptions {
    * for validating client cert before processing the request.
    */
   using NewConnectionFilter =
-      folly::Function<void(const folly::AsyncTransportWrapper* /* sock */,
+      folly::Function<void(const folly::AsyncTransport* /* sock */,
                            const folly::SocketAddress* /* address */,
                            const std::string& /* nextProtocolName */,
                            SecureTransportType /* secureTransportType */,
@@ -114,10 +113,32 @@ class HTTPServerOptions {
   uint32_t maxConcurrentIncomingStreams{100};
 
   /**
-   * Set to true to enable gzip content compression. Currently false for
-   * backwards compatibility.
+   * Set to true to enable content compression. Currently false for
+   * backwards compatibility.  If enabled, by default gzip will be enabled
+   * and zstd will be disabed.
    */
   bool enableContentCompression{false};
+
+  /**
+   * Set to true to enable zstd compression. Currently false for
+   * backwards compatibility.
+   * Only applicable if enableContentCompression is set to true.
+   */
+  bool enableZstdCompression{false};
+
+  /**
+   * Set to true to compress independent chunks for zstd.
+   * Only applicable if enableContentCompression and enableZstdCompression are
+   * set to true.
+   */
+  bool useZstdIndependentChunks{false};
+
+  /**
+   * Set to false to disable GZIP compression.  This can be helpful for services
+   * with long-lived streams for which GZIP can result in high memory usage.
+   * NOTE: this does not override `enableContentCompression`.
+   */
+  bool enableGzipCompression{true};
 
   /**
    * Requests smaller than the specified number of bytes will not be compressed
@@ -131,6 +152,15 @@ class HTTPServerOptions {
   int contentCompressionLevel{-1};
 
   /**
+   * Zstd compression level, valid values are -5 to 22.
+   * As level increases, compression ratio improves at the cost
+   * of higher cpu usage.
+   * Default is 8, which was found to be a good balance
+   * between compression ratio and cpu usage.
+   */
+  int zstdContentCompressionLevel{8};
+
+  /**
    * Enable support for pub-sub extension.
    */
   bool enableExHeaders{false};
@@ -139,17 +169,17 @@ class HTTPServerOptions {
    * Content types to compress, all entries as lowercase
    */
   std::set<std::string> contentCompressionTypes = {
-    "application/javascript",
-    "application/json",
-    "application/x-javascript",
-    "application/xhtml+xml",
-    "application/xml",
-    "application/xml+rss",
-    "text/css",
-    "text/html",
-    "text/javascript",
-    "text/plain",
-    "text/xml",
+      "application/javascript",
+      "application/json",
+      "application/x-javascript",
+      "application/xhtml+xml",
+      "application/xml",
+      "application/xml+rss",
+      "text/css",
+      "text/html",
+      "text/javascript",
+      "text/plain",
+      "text/xml",
   };
 
   /**
@@ -189,4 +219,4 @@ class HTTPServerOptions {
    */
   NewConnectionFilter newConnectionFilter;
 };
-}
+} // namespace proxygen

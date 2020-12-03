@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include "EchoHandler.h"
 
 #include <proxygen/httpserver/RequestHandler.h>
@@ -16,30 +15,35 @@
 
 using namespace proxygen;
 
+DEFINE_bool(request_number,
+            true,
+            "Include request sequence number in response");
+
 namespace EchoService {
 
-EchoHandler::EchoHandler(EchoStats* stats): stats_(stats) {
+EchoHandler::EchoHandler(EchoStats* stats) : stats_(stats) {
 }
 
-void EchoHandler::onRequest(std::unique_ptr<HTTPMessage> /*headers*/) noexcept {
+void EchoHandler::onRequest(std::unique_ptr<HTTPMessage> req) noexcept {
   stats_->recordRequest();
+  ResponseBuilder builder(downstream_);
+  builder.status(200, "OK");
+  if (FLAGS_request_number) {
+    builder.header("Request-Number",
+                   folly::to<std::string>(stats_->getRequestCount()));
+  }
+  req->getHeaders().forEach([&](std::string& name, std::string& value) {
+    builder.header(folly::to<std::string>("x-echo-", name), value);
+  });
+  builder.send();
 }
 
 void EchoHandler::onBody(std::unique_ptr<folly::IOBuf> body) noexcept {
-  if (body_) {
-    body_->prependChain(std::move(body));
-  } else {
-    body_ = std::move(body);
-  }
+  ResponseBuilder(downstream_).body(std::move(body)).send();
 }
 
 void EchoHandler::onEOM() noexcept {
-  ResponseBuilder(downstream_)
-    .status(200, "OK")
-    .header("Request-Number",
-            folly::to<std::string>(stats_->getRequestCount()))
-    .body(std::move(body_))
-    .sendWithEOM();
+  ResponseBuilder(downstream_).sendWithEOM();
 }
 
 void EchoHandler::onUpgrade(UpgradeProtocol /*protocol*/) noexcept {
@@ -50,5 +54,7 @@ void EchoHandler::requestComplete() noexcept {
   delete this;
 }
 
-void EchoHandler::onError(ProxygenError /*err*/) noexcept { delete this; }
+void EchoHandler::onError(ProxygenError /*err*/) noexcept {
+  delete this;
 }
+} // namespace EchoService

@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <glog/logging.h>
@@ -17,14 +16,13 @@ namespace proxygen {
 template <typename ClockType = std::chrono::steady_clock>
 class MockTimeUtilGeneric : public TimeUtilGeneric<ClockType> {
  public:
-
   void advance(std::chrono::milliseconds ms) {
     t_ += ms;
   }
 
   void setCurrentTime(std::chrono::time_point<ClockType> t) {
     CHECK(t.time_since_epoch() > t_.time_since_epoch())
-      << "Time can not move backwards";
+        << "Time can not move backwards";
     t_ = t;
   }
 
@@ -41,4 +39,4 @@ class MockTimeUtilGeneric : public TimeUtilGeneric<ClockType> {
 
 using MockTimeUtil = MockTimeUtilGeneric<>;
 
-}
+} // namespace proxygen

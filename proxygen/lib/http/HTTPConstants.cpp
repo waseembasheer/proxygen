@@ -1,20 +1,18 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/HTTPConstants.h>
 
 namespace proxygen {
 
 #define CONNECTION_CLOSE_REASON_STRING(e, r) r,
 const char* connectionCloseStrings[] = {
-  CONNECTION_CLOSE_REASON_GEN(CONNECTION_CLOSE_REASON_STRING)
-};
+    CONNECTION_CLOSE_REASON_GEN(CONNECTION_CLOSE_REASON_STRING)};
 #undef CONNECTION_CLOSE_REASON_STRING
 
 const char* getConnectionCloseReasonStringByIndex(unsigned int index) {
@@ -29,4 +27,4 @@ const char* getConnectionCloseReasonString(ConnectionCloseReason r) {
   return connectionCloseStrings[(unsigned int)r];
 }
 
-}
+} // namespace proxygen

@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/io/async/SSLContext.h>
@@ -20,6 +19,8 @@ class HTTPSessionStats;
 class SPDYStats;
 
 class HTTPUpstreamSession final : public HTTPSession {
+  using NewTransactionError = std::string;
+
  public:
   /**
    * @param sock           An open socket on which any applicable TLS
@@ -32,8 +33,8 @@ class HTTPUpstreamSession final : public HTTPSession {
    *                         priority levels.
    */
   HTTPUpstreamSession(
-      const WheelTimerInstance& timeout,
-      folly::AsyncTransportWrapper::UniquePtr&& sock,
+      const WheelTimerInstance& wheelTimer,
+      folly::AsyncTransport::UniquePtr&& sock,
       const folly::SocketAddress& localAddr,
       const folly::SocketAddress& peerAddr,
       std::unique_ptr<HTTPCodec> codec,
@@ -42,7 +43,7 @@ class HTTPUpstreamSession final : public HTTPSession {
       uint8_t maxVirtualPri = 0,
       std::shared_ptr<const PriorityMapFactory> priorityMapFactory =
           std::shared_ptr<const PriorityMapFactory>())
-      : HTTPSession(timeout,
+      : HTTPSession(wheelTimer,
                     std::move(sock),
                     localAddr,
                     peerAddr,
@@ -63,8 +64,8 @@ class HTTPUpstreamSession final : public HTTPSession {
 
   // uses folly::HHWheelTimer instance which is used on client side & thrift
   HTTPUpstreamSession(
-      folly::HHWheelTimer* timeout,
-      folly::AsyncTransportWrapper::UniquePtr&& sock,
+      folly::HHWheelTimer* wheelTimer,
+      folly::AsyncTransport::UniquePtr&& sock,
       const folly::SocketAddress& localAddr,
       const folly::SocketAddress& peerAddr,
       std::unique_ptr<HTTPCodec> codec,
@@ -73,7 +74,7 @@ class HTTPUpstreamSession final : public HTTPSession {
       uint8_t maxVirtualPri = 0,
       std::shared_ptr<const PriorityMapFactory> priorityMapFactory =
           std::shared_ptr<const PriorityMapFactory>())
-      : HTTPUpstreamSession(WheelTimerInstance(timeout),
+      : HTTPUpstreamSession(WheelTimerInstance(wheelTimer),
                             std::move(sock),
                             localAddr,
                             peerAddr,
@@ -90,7 +91,7 @@ class HTTPUpstreamSession final : public HTTPSession {
 
   void attachThreadLocals(folly::EventBase* eventBase,
                           folly::SSLContextPtr sslContext,
-                          const WheelTimerInstance& timeout,
+                          const WheelTimerInstance& wheelTimer,
                           HTTPSessionStats* stats,
                           FilterIteratorFn fn,
                           HeaderCodec::Stats* headerCodecStats,
@@ -141,6 +142,9 @@ class HTTPUpstreamSession final : public HTTPSession {
     }
     return priorityAdapter_->getHTTPPriority(level);
   }
+
+  folly::Expected<HTTPTransaction*, NewTransactionError>
+  newTransactionWithError(HTTPTransaction::Handler* handler);
 
  private:
   ~HTTPUpstreamSession() override;

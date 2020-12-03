@@ -1,16 +1,15 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/CodecProtocol.h>
-#include <proxygen/lib/http/codec/HTTPCodec.h>
-#include <proxygen/lib/http/codec/HTTP2Constants.h>
 #include <boost/algorithm/string/trim.hpp>
+#include <proxygen/lib/http/codec/HTTP2Constants.h>
+#include <proxygen/lib/http/codec/HTTPCodec.h>
 
 #include <glog/logging.h>
 
@@ -45,29 +44,32 @@ extern CodecProtocol getCodecProtocolFromStr(folly::StringPiece protocolStr) {
   }
 }
 
-}
+} // namespace
 
 extern const std::string& getCodecProtocolString(CodecProtocol proto) {
   switch (proto) {
-    case CodecProtocol::HTTP_1_1: return http_1_1;
-    case CodecProtocol::SPDY_3: return spdy_3;
-    case CodecProtocol::SPDY_3_1: return spdy_3_1;
-    case CodecProtocol::HTTP_2: return http_2;
-    case CodecProtocol::HTTP_3: return h3;
-    case CodecProtocol::HQ: return hq;
+    case CodecProtocol::HTTP_1_1:
+      return http_1_1;
+    case CodecProtocol::SPDY_3:
+      return spdy_3;
+    case CodecProtocol::SPDY_3_1:
+      return spdy_3_1;
+    case CodecProtocol::HTTP_2:
+      return http_2;
+    case CodecProtocol::HTTP_3:
+      return h3;
+    case CodecProtocol::HQ:
+      return hq;
   }
   LOG(FATAL) << "Unreachable";
   return empty;
 }
 
 extern bool isValidCodecProtocolStr(const std::string& protocolStr) {
-  return protocolStr == http_1_1 ||
-         protocolStr == spdy_3 ||
-         protocolStr == spdy_3_1 ||
-         protocolStr == http2::kProtocolString ||
+  return protocolStr == http_1_1 || protocolStr == spdy_3 ||
+         protocolStr == spdy_3_1 || protocolStr == http2::kProtocolString ||
          protocolStr == http2::kProtocolCleartextString ||
-         protocolStr == http_2 ||
-         protocolStr == hq;
+         protocolStr == http_2 || protocolStr == hq;
 }
 
 extern CodecProtocol getCodecProtocolFromStr(const std::string& protocolStr) {
@@ -103,7 +105,7 @@ checkForProtocolUpgrade(const std::string& clientUpgrade,
   // Should be a comma separated list of protocols, like NPN
   std::vector<folly::StringPiece> clientProtocols;
   folly::split(",", clientUpgrade, clientProtocols, true /* ignore empty */);
-  for (auto& clientProtocol: clientProtocols) {
+  for (auto& clientProtocol : clientProtocols) {
     boost::algorithm::trim(clientProtocol);
   }
 
@@ -113,10 +115,11 @@ checkForProtocolUpgrade(const std::string& clientUpgrade,
   std::vector<folly::StringPiece> serverProtocols;
   folly::split(",", serverUpgrade, serverProtocols, true /* ignore empty */);
 
-  for (auto& testProtocol: serverProtocols) {
+  for (auto& testProtocol : serverProtocols) {
     // Get rid of leading/trailing LWS
     boost::algorithm::trim(testProtocol);
-    if (std::find(clientProtocols.begin(), clientProtocols.end(),
+    if (std::find(clientProtocols.begin(),
+                  clientProtocols.end(),
                   testProtocol) == clientProtocols.end()) {
       if (serverMode) {
         // client didn't offer this, try the next
@@ -135,8 +138,7 @@ checkForProtocolUpgrade(const std::string& clientUpgrade,
 
 const folly::Optional<HTTPCodec::ExAttributes> HTTPCodec::NoExAttributes =
     folly::none;
-const folly::Optional<HTTPCodec::StreamID> HTTPCodec::NoStream =
-    folly::none;
+const folly::Optional<HTTPCodec::StreamID> HTTPCodec::NoStream = folly::none;
 const folly::Optional<uint8_t> HTTPCodec::NoPadding = folly::none;
 
-}
+} // namespace proxygen

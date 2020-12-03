@@ -1,20 +1,18 @@
 /*
- *  Copyright (c) 2004-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/structuredheaders/StructuredHeadersDecoder.h>
-#include <string>
 #include <folly/portability/GTest.h>
+#include <string>
 
-namespace proxygen{
+namespace proxygen {
 
-class StructuredHeadersDecoderTest : public testing::Test {
-};
+class StructuredHeadersDecoderTest : public testing::Test {};
 
 TEST_F(StructuredHeadersDecoderTest, TestItem) {
   std::string input = "645643";
@@ -156,7 +154,8 @@ TEST_F(StructuredHeadersDecoderTest, TestParamListManyElts) {
   EXPECT_EQ(pl[0].parameterMap.size(), 3);
   EXPECT_EQ(pl[0].parameterMap["a"].tag, StructuredHeaderItem::Type::INT64);
   EXPECT_EQ(pl[0].parameterMap["b"].tag, StructuredHeaderItem::Type::INT64);
-  EXPECT_EQ(pl[0].parameterMap["c_4"].tag, StructuredHeaderItem::Type::NONE);
+  EXPECT_EQ(pl[0].parameterMap["c_4"].tag, StructuredHeaderItem::Type::BOOLEAN);
+  EXPECT_EQ(pl[0].parameterMap["c_4"], true);
   EXPECT_EQ(pl[0].parameterMap["a"], int64_t(1));
   EXPECT_EQ(pl[0].parameterMap["b"], int64_t(2));
 
@@ -164,7 +163,7 @@ TEST_F(StructuredHeadersDecoderTest, TestParamListManyElts) {
   EXPECT_EQ(pl[1].parameterMap.size(), 2);
   EXPECT_EQ(pl[1].parameterMap["q"].tag, StructuredHeaderItem::Type::STRING);
   EXPECT_EQ(pl[1].parameterMap["r"].tag,
-    StructuredHeaderItem::Type::BINARYCONTENT);
+            StructuredHeaderItem::Type::BINARYCONTENT);
   EXPECT_EQ(pl[1].parameterMap["q"], std::string("9"));
   EXPECT_EQ(pl[1].parameterMap["r"], std::string("max is awesome"));
 }
@@ -213,13 +212,52 @@ TEST_F(StructuredHeadersDecoderTest, TestParamListNullValues) {
 
   EXPECT_EQ(pl[0].identifier, "beverages");
   EXPECT_EQ(pl[0].parameterMap.size(), 2);
-  EXPECT_EQ(pl[0].parameterMap["water"].tag, StructuredHeaderItem::Type::NONE);
-  EXPECT_EQ(pl[0].parameterMap["juice"].tag, StructuredHeaderItem::Type::NONE);
+  EXPECT_EQ(pl[0].parameterMap["water"].tag,
+            StructuredHeaderItem::Type::BOOLEAN);
+  EXPECT_EQ(pl[0].parameterMap["water"], true);
+  EXPECT_EQ(pl[0].parameterMap["juice"].tag,
+            StructuredHeaderItem::Type::BOOLEAN);
+  EXPECT_EQ(pl[0].parameterMap["juice"], true);
 
   EXPECT_EQ(pl[1].identifier, "food");
   EXPECT_EQ(pl[1].parameterMap.size(), 2);
-  EXPECT_EQ(pl[1].parameterMap["pizza"].tag, StructuredHeaderItem::Type::NONE);
-  EXPECT_EQ(pl[1].parameterMap["burger"].tag, StructuredHeaderItem::Type::NONE);
+  EXPECT_EQ(pl[1].parameterMap["pizza"].tag,
+            StructuredHeaderItem::Type::BOOLEAN);
+  EXPECT_EQ(pl[1].parameterMap["burger"].tag,
+            StructuredHeaderItem::Type::BOOLEAN);
 }
 
+TEST_F(StructuredHeadersDecoderTest, PriorityWithIncremental) {
+  std::string priority = "u=5, i";
+  StructuredHeadersDecoder decoder(priority);
+  StructuredHeaders::Dictionary dict;
+  auto ret = decoder.decodeDictionary(dict);
+  EXPECT_EQ(ret, StructuredHeaders::DecodeError::OK);
+  EXPECT_EQ(2, dict.size());
+  EXPECT_EQ(dict["u"].tag, StructuredHeaderItem::Type::INT64);
+  EXPECT_EQ(dict["u"], (int64_t)5);
+  EXPECT_EQ(dict["i"].tag, StructuredHeaderItem::Type::BOOLEAN);
+  EXPECT_EQ(dict["i"], true);
 }
+
+TEST_F(StructuredHeadersDecoderTest, PriorityWithoutIncremental) {
+  std::string priority = "u=5";
+  StructuredHeadersDecoder decoder(priority);
+  StructuredHeaders::Dictionary dict;
+  auto ret = decoder.decodeDictionary(dict);
+  EXPECT_EQ(ret, StructuredHeaders::DecodeError::OK);
+  EXPECT_EQ(1, dict.size());
+  EXPECT_EQ(dict["u"].tag, StructuredHeaderItem::Type::INT64);
+  EXPECT_EQ(dict["u"], (int64_t)5);
+  EXPECT_EQ(dict.find("i"), dict.end());
+}
+
+TEST_F(StructuredHeadersDecoderTest, PriorityWithoutIncrementalHasComma) {
+  std::string priority = "u=5,";
+  StructuredHeadersDecoder decoder(priority);
+  StructuredHeaders::Dictionary dict;
+  auto ret = decoder.decodeDictionary(dict);
+  EXPECT_NE(ret, StructuredHeaders::DecodeError::OK);
+}
+
+} // namespace proxygen

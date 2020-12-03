@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2018-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/compress/HPACKDecoderBase.h>
 #include <proxygen/lib/http/codec/compress/HeaderTable.h>
 
@@ -16,7 +15,7 @@ uint32_t HPACKDecoderBase::emit(const HPACKHeader& header,
                                 HPACK::StreamingCallback* streamingCb,
                                 headers_t* emitted) {
   if (streamingCb) {
-    streamingCb->onHeader(header.name.get(), header.value);
+    streamingCb->onHeader(header.name, header.value);
   } else if (emitted) {
     // copying HPACKHeader
     emitted->emplace_back(header.name.get(), header.value);
@@ -24,13 +23,12 @@ uint32_t HPACKDecoderBase::emit(const HPACKHeader& header,
   return header.realBytes();
 }
 
-void HPACKDecoderBase::completeDecode(
-    HeaderCodec::Type type,
-    HPACK::StreamingCallback* streamingCb,
-    uint32_t compressedSize,
-    uint32_t compressedBlockSize,
-    uint32_t emittedSize,
-    bool acknowledge) {
+void HPACKDecoderBase::completeDecode(HeaderCodec::Type type,
+                                      HPACK::StreamingCallback* streamingCb,
+                                      uint32_t compressedSize,
+                                      uint32_t compressedBlockSize,
+                                      uint32_t emittedSize,
+                                      bool acknowledge) {
   if (!streamingCb) {
     return;
   }
@@ -56,8 +54,8 @@ void HPACKDecoderBase::completeDecode(
   }
 }
 
-void HPACKDecoderBase::setHeaderTableMaxSize(
-    HeaderTable& table, uint32_t maxSize) {
+void HPACKDecoderBase::setHeaderTableMaxSize(HeaderTable& table,
+                                             uint32_t maxSize) {
   maxTableSize_ = maxSize;
   if (maxTableSize_ < table.capacity()) {
     CHECK(table.setCapacity(maxTableSize_));
@@ -86,4 +84,4 @@ void HPACKDecoderBase::handleTableSizeUpdate(HPACKDecodeBuffer& dbuf,
   table.setCapacity(arg);
 }
 
-}
+} // namespace proxygen

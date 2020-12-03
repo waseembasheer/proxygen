@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <cstdint>
@@ -78,7 +77,7 @@ class Window {
 
  private:
   int32_t outstanding_{0};
-  int32_t capacity_{0};  // always positive
+  int32_t capacity_{0}; // always positive
 };
 
-}
+} // namespace proxygen

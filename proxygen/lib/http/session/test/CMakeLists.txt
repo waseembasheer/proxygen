@@ -1,9 +1,8 @@
-# Copyright (c) 2019-present, Facebook, Inc.
+# Copyright (c) Facebook, Inc. and its affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree. An additional grant
-# of patent rights can be found in the PATENTS file in the same directory.
+# LICENSE file in the root directory of this source tree.
 
 if(NOT BUILD_TESTS)
     return()
@@ -31,11 +30,11 @@ proxygen_add_test(TARGET SessionTests
 if (BUILD_QUIC)
   proxygen_add_test(TARGET HQSessionTests
     SOURCES
+      HQByteEventTrackerTest.cpp
       HQDownstreamSessionTest.cpp
       HQSessionMocksTest.cpp
       HQSessionTestCommon.cpp
       HQStreamBaseTest.cpp
-      HQStreamLookupTest.cpp
       HQUnidirectionalCallbacksTest.cpp
       HQUpstreamSessionTest.cpp
       TestUtils.cpp
@@ -48,5 +47,3 @@ if (BUILD_QUIC)
       mvfst::mvfst_state_machine
   )
 endif()
-
-

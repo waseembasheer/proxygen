@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/session/HQStreamBase.h>
 #include <proxygen/lib/http/session/HQSession.h>
 
@@ -33,6 +32,10 @@ const HTTPCodec& HQStreamBase::getCodec() const noexcept {
   }
   // must be the current codec
   return *CHECK_NOTNULL(&codecFilterChain.getChainEnd());
+}
+
+HQSession& HQStreamBase::getSession() const noexcept {
+  return session_;
 }
 
 /**
@@ -90,13 +93,15 @@ folly::Function<void()> HQStreamBase::setActiveCodec(const std::string& where) {
 size_t HQStreamBase::generateStreamPreface() {
   // Request (aka HQStreamTransport) streams do not type set.
   // If "generateStreamPreface" is invoked on those, its a bug
-  CHECK(type_.hasValue())
+  CHECK(type_.has_value())
       << "Can not generate preface on streams without a type";
   VLOG(4) << "generating stream preface for " << type_.value()
           << " stream streamID=" << getEgressStreamId() << " sess=" << session_;
   folly::io::QueueAppender appender(&writeBuf_, sizeof(uint64_t));
-  auto res = quic::encodeQuicInteger(
-      static_cast<hq::StreamTypeType>(type_.value()), appender);
+  auto res =
+      quic::encodeQuicInteger(static_cast<hq::StreamTypeType>(type_.value()),
+                              [appender = std::move(appender)](
+                                  auto val) mutable { appender.writeBE(val); });
   CHECK(!res.hasError());
   return res.value();
 }

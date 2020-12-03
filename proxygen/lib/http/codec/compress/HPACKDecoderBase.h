@@ -1,18 +1,17 @@
 /*
- *  Copyright (c) 2018-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
-#include <proxygen/lib/http/codec/compress/HeaderCodec.h>
 #include <proxygen/lib/http/codec/compress/HPACKDecodeBuffer.h>
 #include <proxygen/lib/http/codec/compress/HPACKHeader.h>
 #include <proxygen/lib/http/codec/compress/HPACKStreamingCallback.h>
+#include <proxygen/lib/http/codec/compress/HeaderCodec.h>
 
 namespace proxygen {
 
@@ -23,11 +22,9 @@ class HeaderTable;
  */
 class HPACKDecoderBase {
  public:
-  HPACKDecoderBase(
-      uint32_t tableSize,
-      uint32_t maxUncompressed)
-      : maxTableSize_(tableSize)
-      , maxUncompressed_(maxUncompressed) {}
+  HPACKDecoderBase(uint32_t tableSize, uint32_t maxUncompressed)
+      : maxTableSize_(tableSize), maxUncompressed_(maxUncompressed) {
+  }
 
   using headers_t = std::vector<HPACKHeader>;
 
@@ -50,13 +47,12 @@ class HPACKDecoderBase {
                 HPACK::StreamingCallback* streamingCb,
                 headers_t* emitted);
 
-  void completeDecode(
-      HeaderCodec::Type type,
-      HPACK::StreamingCallback* streamingCb,
-      uint32_t compressedSize,
-      uint32_t compressedBlockSize,
-      uint32_t emittedSize,
-      bool acknowledge = false);
+  void completeDecode(HeaderCodec::Type type,
+                      HPACK::StreamingCallback* streamingCb,
+                      uint32_t compressedSize,
+                      uint32_t compressedBlockSize,
+                      uint32_t emittedSize,
+                      bool acknowledge = false);
 
   void handleTableSizeUpdate(HPACKDecodeBuffer& dbuf,
                              HeaderTable& table,
@@ -69,4 +65,4 @@ class HPACKDecoderBase {
   uint64_t maxUncompressed_;
 };
 
-}
+} // namespace proxygen

@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/Expected.h>
@@ -41,10 +40,10 @@ class GzipHeaderCodec : public HeaderCodec {
   ~GzipHeaderCodec() override;
 
   std::unique_ptr<folly::IOBuf> encode(
-    std::vector<compress::Header>& headers) noexcept;
+      std::vector<compress::Header>& headers) noexcept;
 
-  folly::Expected<HeaderDecodeResult, GzipDecodeError>
-  decode(folly::io::Cursor& cursor, uint32_t length) noexcept;
+  folly::Expected<HeaderDecodeResult, GzipDecodeError> decode(
+      folly::io::Cursor& cursor, uint32_t length) noexcept;
 
   /**
    * same as above, but for decode
@@ -59,9 +58,8 @@ class GzipHeaderCodec : public HeaderCodec {
   /**
    * Parse the decompressed name/value header block.
    */
-  folly::Expected<size_t, GzipDecodeError>
-  parseNameValues(const folly::IOBuf& uncompressed,
-                  uint32_t uncompressedLength) noexcept;
+  folly::Expected<size_t, GzipDecodeError> parseNameValues(
+      const folly::IOBuf& uncompressed, uint32_t uncompressedLength) noexcept;
 
   const SPDYVersionSettings& versionSettings_;
   z_stream deflater_;
@@ -69,4 +67,4 @@ class GzipHeaderCodec : public HeaderCodec {
   compress::HeaderPieceList outHeaders_;
   HTTPHeaderSize decodedSize_;
 };
-}
+} // namespace proxygen

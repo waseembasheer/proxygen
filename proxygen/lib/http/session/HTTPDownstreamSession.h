@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/lib/http/session/HTTPSession.h>
@@ -26,7 +25,7 @@ class HTTPDownstreamSession final : public HTTPSession {
    *                     whatever HTTP-like wire format this session needs.
    */
   HTTPDownstreamSession(const WheelTimerInstance& timeout,
-                        folly::AsyncTransportWrapper::UniquePtr&& sock,
+                        folly::AsyncTransport::UniquePtr&& sock,
                         const folly::SocketAddress& localAddr,
                         const folly::SocketAddress& peerAddr,
                         HTTPSessionController* controller,
@@ -46,7 +45,7 @@ class HTTPDownstreamSession final : public HTTPSession {
 
   // allows using HTTPDownstreamSession with HHWheelTimer when it is not shared
   HTTPDownstreamSession(folly::HHWheelTimer* timer,
-                        folly::AsyncTransportWrapper::UniquePtr&& sock,
+                        folly::AsyncTransport::UniquePtr&& sock,
                         const folly::SocketAddress& localAddr,
                         const folly::SocketAddress& peerAddr,
                         HTTPSessionController* controller,

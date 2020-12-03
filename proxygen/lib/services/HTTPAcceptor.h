@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/io/async/AsyncServerSocket.h>
@@ -25,13 +24,6 @@ class HTTPAcceptor : public wangle::Acceptor {
   }
 
   /**
-   * Returns true if this server is internal to facebook
-   */
-  bool isInternal() const {
-    return accConfig_.internal;
-  }
-
-  /**
    * Access the general-purpose timeout manager for transactions.
    */
   virtual const WheelTimerInstance& getTransactionTimeoutSet() {
@@ -40,10 +32,12 @@ class HTTPAcceptor : public wangle::Acceptor {
 
   void init(folly::AsyncServerSocket* serverSocket,
             folly::EventBase* eventBase,
-            wangle::SSLStats* /*stat*/ = nullptr) override {
+            wangle::SSLStats* /*stat*/ = nullptr,
+            std::shared_ptr<const fizz::server::FizzServerContext> fizzCtx =
+                nullptr) override {
     timer_ = std::make_unique<WheelTimerInstance>(
         accConfig_.transactionIdleTimeout, eventBase);
-    Acceptor::init(serverSocket, eventBase);
+    Acceptor::init(serverSocket, eventBase, nullptr, fizzCtx);
   }
 
   const AcceptorConfiguration& getConfig() const {

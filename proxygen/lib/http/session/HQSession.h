@@ -1,11 +1,9 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 #pragma once
@@ -14,6 +12,7 @@
 #include <folly/io/async/AsyncSocket.h>
 #include <folly/io/async/DelayedDestructionBase.h>
 #include <folly/io/async/EventBase.h>
+#include <folly/lang/Assume.h>
 #include <proxygen/lib/http/codec/HQControlCodec.h>
 #include <proxygen/lib/http/codec/HQStreamCodec.h>
 #include <proxygen/lib/http/codec/HQUnidirectionalCodec.h>
@@ -25,9 +24,8 @@
 #include <proxygen/lib/http/codec/HTTPSettings.h>
 #include <proxygen/lib/http/codec/QPACKDecoderCodec.h>
 #include <proxygen/lib/http/codec/QPACKEncoderCodec.h>
-#include <proxygen/lib/http/session/ByteEventTracker.h>
+#include <proxygen/lib/http/session/HQByteEventTracker.h>
 #include <proxygen/lib/http/session/HQStreamBase.h>
-#include <proxygen/lib/http/session/HQStreamLookup.h>
 #include <proxygen/lib/http/session/HQUnidirectionalCallbacks.h>
 #include <proxygen/lib/http/session/HTTPSessionBase.h>
 #include <proxygen/lib/http/session/HTTPSessionController.h>
@@ -35,6 +33,7 @@
 #include <proxygen/lib/http/session/ServerPushLifecycle.h>
 #include <proxygen/lib/utils/ConditionalGate.h>
 #include <quic/api/QuicSocket.h>
+#include <quic/common/BufUtil.h>
 #include <quic/logging/QuicLogger.h>
 
 namespace proxygen {
@@ -53,6 +52,7 @@ enum class HQVersion : uint8_t {
 
 extern const std::string kH3FBCurrentDraft;
 extern const std::string kH3CurrentDraft;
+extern const std::string kH3LegacyDraft;
 extern const std::string kHQCurrentDraft;
 
 // Default Priority Node
@@ -124,11 +124,11 @@ class HQSession
     , public HQUnidirStreamDispatcher::Callback {
 
   // Forward declarations
+ public:
+  class HQStreamTransportBase;
+
  protected:
   class HQStreamTransport;
-  class HQEgressPushStream;
-  class HQIngressPushStream;
-  class HQStreamTransportBase;
 
  private:
   class HQControlStream;
@@ -139,6 +139,10 @@ class HQSession
   static constexpr uint8_t kMaxCodecStackDepth = 3;
 
  public:
+  folly::Optional<hq::PushId> getMaxAllowedPushId() {
+    return maxAllowedPushId_;
+  }
+
   void setServerPushLifecycleCallback(ServerPushLifecycleCallback* cb) {
     serverPushLifecycleCb_ = cb;
   }
@@ -171,12 +175,18 @@ class HQSession
      */
     virtual void connectError(
         std::pair<quic::QuicErrorCode, std::string> code) = 0;
+
+    /**
+     * Callback for the first time transport has processed a packet from peer.
+     */
+    virtual void onFirstPeerPacketProcessed() {
+    }
   };
 
   virtual ~HQSession();
 
-  HTTPSessionBase::SessionType getType() const noexcept override {
-    return HTTPSessionBase::SessionType::HQ;
+  HTTPTransaction::Transport::Type getType() const noexcept override {
+    return HTTPTransaction::Transport::Type::QUIC;
   }
 
   void setSocket(std::shared_ptr<quic::QuicSocket> sock) noexcept {
@@ -215,6 +225,8 @@ class HQSession
   void onConnectionError(
       std::pair<quic::QuicErrorCode, std::string> code) noexcept override;
 
+  void onKnob(uint64_t knobSpace, uint64_t knobId, quic::Buf knobBlob) override;
+
   // returns false in case of failure
   bool onTransportReadyCommon() noexcept;
 
@@ -240,11 +252,6 @@ class HQSession
   // Only for UpstreamSession
   HTTPTransaction* newTransaction(HTTPTransaction::Handler* handler) override;
 
-  // Create a new pushed transaction.
-  HTTPTransaction* newPushedTransaction(
-      HTTPCodec::StreamID, /* parentRequestStreamId */
-      HTTPTransaction::PushHandler* /* handler */);
-
   void startNow() override;
 
   void describe(std::ostream& os) const override {
@@ -265,6 +272,7 @@ class HQSession
          << ", local=" << getLocalAddress() << ", " << getPeerAddress()
          << "=upstream";
     }
+    os << ", drain=" << drainState_;
   }
 
   void onGoaway(uint64_t lastGoodStreamID,
@@ -273,7 +281,7 @@ class HQSession
 
   void onSettings(const SettingsList& settings);
 
-  folly::AsyncTransportWrapper* getTransport() override {
+  folly::AsyncTransport* getTransport() override {
     return nullptr;
   }
 
@@ -284,26 +292,16 @@ class HQSession
     return nullptr;
   }
 
-  const folly::AsyncTransportWrapper* getTransport() const override {
+  const folly::AsyncTransport* getTransport() const override {
     return nullptr;
   }
 
   bool hasActiveTransactions() const override {
-    return numberOfStreams() > 0;
+    return getNumStreams() > 0;
   }
 
-  uint32_t getNumOutgoingStreams() const override {
-    // need transport API
-    return static_cast<uint32_t>((direction_ == TransportDirection::DOWNSTREAM)
-                                     ? numberOfEgressPushStreams()
-                                     : numberOfEgressStreams());
-  }
-
-  uint32_t getNumIncomingStreams() const override {
-    // need transport API
-    return static_cast<uint32_t>((direction_ == TransportDirection::UPSTREAM)
-                                     ? numberOfIngressPushStreams()
-                                     : numberOfIngressStreams());
+  uint32_t getNumStreams() const override {
+    return getNumOutgoingStreams() + getNumIncomingStreams();
   }
 
   CodecProtocol getCodecProtocol() const override {
@@ -336,6 +334,7 @@ class HQSession
       sock_->setConnectionFlowControlWindow(receiveSessionWindowSize);
     }
     receiveStreamWindowSize_ = (uint32_t)receiveStreamWindowSize;
+    HTTPSessionBase::setReadBufferLimit((uint32_t)receiveSessionWindowSize);
   }
 
   /**
@@ -371,6 +370,14 @@ class HQSession
   size_t sendPing() override {
     sock_->sendPing(nullptr, std::chrono::milliseconds(0));
     return 0;
+  }
+
+  /**
+   * Sends a knob frame on the session.
+   */
+  folly::Expected<folly::Unit, quic::LocalErrorCode> sendKnob(
+      uint64_t knobSpace, uint64_t knobId, quic::Buf knobBlob) {
+    return sock_->setKnob(knobSpace, knobId, std::move(knobBlob));
   }
 
   /**
@@ -412,13 +419,15 @@ class HQSession
   void timeoutExpired() noexcept override;
 
   bool isBusy() const override {
-    return numberOfStreams() > 0;
+    return getNumStreams() > 0;
   }
   void notifyPendingShutdown() override;
   void closeWhenIdle() override;
-  void dropConnection() override;
+  void dropConnection(const std::string& errorMsg = "") override;
   void dumpConnectionState(uint8_t /*loglevel*/) override {
   }
+
+  virtual void injectTraceEventIntoAllTransactions(TraceEvent& event) override;
 
   /*
    * dropConnectionSync drops the connection immediately.
@@ -429,9 +438,8 @@ class HQSession
    *
    * proxygenError is delivered to open transactions
    */
-  void dropConnectionSync(
-      std::pair<quic::QuicErrorCode, std::string> errorCode,
-      ProxygenError proxygenError);
+  void dropConnectionSync(std::pair<quic::QuicErrorCode, std::string> errorCode,
+                          ProxygenError proxygenError);
 
   // Invokes dropConnectionSync at the beginning of the next loopCallback
   void dropConnectionAsync(
@@ -469,24 +477,36 @@ class HQSession
     return folly::none;
   }
 
-  const quic::QuicSocket* getQuicSocket() const {
+  quic::QuicSocket* getQuicSocket() const {
     return sock_.get();
   }
 
   // Override HTTPSessionBase address getter functions
-  const folly::SocketAddress& getLocalAddress() const noexcept {
+  const folly::SocketAddress& getLocalAddress() const noexcept override {
     return sock_ && sock_->good() ? sock_->getLocalAddress() : localAddr_;
   }
 
-  const folly::SocketAddress& getPeerAddress() const noexcept {
+  const folly::SocketAddress& getPeerAddress() const noexcept override {
     return sock_ && sock_->good() ? sock_->getPeerAddress() : peerAddr_;
   }
 
   void setPartiallyReliableCallbacks(quic::StreamId id);
 
   bool isPartialReliabilityEnabled() const noexcept {
-    CHECK(versionUtils_) << ": versionUtils is not set";
+    CHECK(versionUtils_);
     return versionUtils_->isPartialReliabilityEnabled();
+  }
+
+  // Returns creation time point for logging of handshake duration
+  const std::chrono::steady_clock::time_point& getCreatedTime() const {
+    return createTime_;
+  }
+
+  void enablePingProbes(std::chrono::seconds /*interval*/,
+                        std::chrono::seconds /*timeout*/,
+                        bool /*extendIntervalOnIngress*/,
+                        bool /*immediate*/) override {
+    // TODO
   }
 
  protected:
@@ -504,18 +524,91 @@ class HQSession
   HQStreamTransportBase* findEgressStream(quic::StreamId streamId,
                                           bool includeDetached = false);
 
-  // Find an ingress push stream
-  HQIngressPushStream* findIngressPushStream(quic::StreamId);
-  HQIngressPushStream* findIngressPushStreamByPushId(hq::PushId);
+  /**
+   * The following functions invoke a callback on all or on all non-detached
+   * request streams. It does an extra lookup per stream but it is safe. Note
+   * that if the callback *adds* streams, they will not get the callback.
+   */
+  void invokeOnAllStreams(std::function<void(HQStreamTransportBase*)> fn) {
+    invokeOnStreamsImpl(
+        std::move(fn),
+        [this](quic::StreamId id) { return this->findStream(id); },
+        true);
+  }
 
-  // Find an egress push stream
-  HQEgressPushStream* findEgressPushStream(quic::StreamId);
-  HQEgressPushStream* findEgressPushStreamByPushId(hq::PushId);
+  void invokeOnEgressStreams(std::function<void(HQStreamTransportBase*)> fn,
+                             bool includeDetached = false) {
+    invokeOnStreamsImpl(std::move(fn),
+                        [this, includeDetached](quic::StreamId id) {
+                          return this->findEgressStream(id, includeDetached);
+                        });
+  }
+
+  void invokeOnIngressStreams(std::function<void(HQStreamTransportBase*)> fn,
+                              bool includeDetached = false) {
+    invokeOnStreamsImpl(std::move(fn),
+                        [this, includeDetached](quic::StreamId id) {
+                          return this->findIngressStream(id, includeDetached);
+                        },
+                        true);
+  }
+
+  void invokeOnNonDetachedStreams(
+      std::function<void(HQStreamTransportBase*)> fn) {
+    invokeOnStreamsImpl(std::move(fn), [this](quic::StreamId id) {
+      return this->findNonDetachedStream(id);
+    });
+  }
+
+  virtual HQStreamTransportBase* findPushStream(quic::StreamId) = 0;
+
+  virtual void findPushStreams(
+      std::unordered_set<HQStreamTransportBase*>& streams) = 0;
+
+  // Apply the function on the streams found by the two locators.
+  // Note that same stream can be returned by a find-by-stream-id
+  // and find-by-push-id locators.
+  // This is mitigated by collecting the streams in an unordered set
+  // prior to application of the funtion
+  // Note that the function is allowed to delete a stream by invoking
+  // erase stream, but the locators are not allowed to do so.
+  // Note that neither the locators nor the function are allowed
+  // to call "invokeOnStreamsImpl"
+  void invokeOnStreamsImpl(
+      std::function<void(HQStreamTransportBase*)> fn,
+      std::function<HQStreamTransportBase*(quic::StreamId)> findByStreamIdFn,
+      bool includePush = false) {
+    DestructorGuard g(this);
+    std::unordered_set<HQStreamTransportBase*> streams;
+    streams.reserve(getNumStreams());
+
+    for (const auto& txn : streams_) {
+      HQStreamTransportBase* pstream = findByStreamIdFn(txn.first);
+      if (pstream) {
+        streams.insert(pstream);
+      }
+    }
+
+    if (includePush) {
+      findPushStreams(streams);
+    }
+
+    for (HQStreamTransportBase* pstream : streams) {
+      CHECK(pstream);
+      fn(pstream);
+    }
+  }
 
   // Erase the stream. Returns true if the stream
   // has been erased
   bool eraseStream(quic::StreamId);
-  bool eraseStreamByPushId(hq::PushId);
+
+  virtual bool erasePushStream(quic::StreamId streamId) = 0;
+
+  void resumeReadsForPushStream(quic::StreamId streamId) {
+    pendingProcessReadSet_.insert(streamId);
+    resumeReads(streamId);
+  }
 
   // Find a control stream by type
   HQControlStream* findControlStream(hq::UnidirectionalStreamType streamType);
@@ -523,13 +616,20 @@ class HQSession
   // Find a control stream by stream id (either ingress or egress)
   HQControlStream* findControlStream(quic::StreamId streamId);
 
-  // NOTE: for now we are using uint32_t as the limit for
-  // the number of streams.
-  uint32_t numberOfStreams() const;
-  uint32_t numberOfIngressStreams() const;
-  uint32_t numberOfEgressStreams() const;
-  uint32_t numberOfIngressPushStreams() const;
-  uint32_t numberOfEgressPushStreams() const;
+  virtual HQStreamTransportBase* createIngressPushStream(quic::StreamId,
+                                                         hq::PushId) {
+    return nullptr;
+  }
+
+  virtual void eraseUnboundStream(HQStreamTransportBase*) {
+  }
+
+  virtual HTTPTransaction* newPushedTransaction(
+      HTTPCodec::StreamID,           /* parentRequestStreamId */
+      HTTPTransaction::PushHandler*, /* handler */
+      ProxygenError*) {
+    return nullptr;
+  }
 
   /*
    * for HQ we need a read callback for unidirectional streams to read the
@@ -545,10 +645,6 @@ class HQSession
       hq::UnidirectionalStreamType /* type */,
       size_t /* toConsume */,
       quic::QuicSocket::PeekCallback* const /* cb */) override;
-
-  void onNewPushStream(quic::StreamId /* pushStreamId */,
-                       hq::PushId /* pushId */,
-                       size_t /* toConsume */) override;
 
   void assignReadCallback(
       quic::StreamId /* id */,
@@ -579,15 +675,7 @@ class HQSession
       quic::StreamId /* id */,
       const HQUnidirStreamDispatcher::Callback::ReadError& /* err */) override;
 
-  /**
-   * Attempt to bind an ingress push stream object (which has the txn)
-   * to a nascent stream (which has the transport/codec).
-   * If successful, remove the nascent stream and
-   * re-enable ingress.
-   * returns true if binding was successful
-   */
-  bool tryBindIngressStreamToTxn(hq::PushId pushId,
-                                 HQIngressPushStream* pushStream = nullptr);
+  void setNewTransactionPauseState(HTTPTransaction* txn) override;
 
   /**
    * HQSession is an HTTPSessionBase that uses QUIC as the underlying transport
@@ -619,7 +707,8 @@ class HQSession
         started_(false),
         dropping_(false),
         inLoopCallback_(false),
-        unidirectionalReadDispatcher_(*this) {
+        unidirectionalReadDispatcher_(*this, direction),
+        createTime_(std::chrono::steady_clock::now()) {
     codec_.add<HTTPChecks>();
     // dummy, ingress, egress
     codecStack_.reserve(kMaxCodecStackDepth);
@@ -681,6 +770,10 @@ class HQSession
 
   std::shared_ptr<quic::QuicSocket> sock_;
 
+  // Callback pointer used for correctness testing. Not used
+  // for session logic.
+  ServerPushLifecycleCallback* serverPushLifecycleCb_{nullptr};
+
  private:
   std::unique_ptr<HTTPCodec> createStreamCodec(quic::StreamId streamId);
 
@@ -699,18 +792,8 @@ class HQSession
   HQControlStream* createIngressControlStream(
       quic::StreamId id, hq::UnidirectionalStreamType streamType);
 
-  // Create ingress push stream.
-  HQIngressPushStream* createIngressPushStream(quic::StreamId parentStreamId,
-                                               hq::PushId pushId);
-
-  HQEgressPushStream* FOLLY_NULLABLE
-  createEgressPushStream(hq::PushId pushId,
-                         quic::StreamId streamId,
-                         quic::StreamId parentStreamId);
-
-  // Value of the next pushId, used for outgoing push transactions
-  // This variable does not have the hq::kPushIdMask set
-  hq::PushId nextAvailablePushId_{0};
+  virtual void cleanupUnboundPushStreams(std::vector<quic::StreamId>&) {
+  }
 
   // gets the ALPN from the transport and returns whether the protocol is
   // supported. Drops the connection if not supported
@@ -737,12 +820,28 @@ class HQSession
   // Pausing reads prevents the read callback to be invoked on the stream
   void resumeReads(quic::StreamId id);
 
+  // Resume all ingress transactions
+  void resumeReads();
+
   // Resuming the reads allows the read callback to be involved
   void pauseReads(quic::StreamId id);
 
+  // Pause all ingress transactions
+  void pauseReads();
+
   void pauseTransactions() override;
 
+  void resumeTransactions() override;
+
   void notifyEgressBodyBuffered(int64_t bytes);
+
+  // The max allowed push id value. Value folly::none indicates that
+  // a. For downstream session: MAX_PUSH_ID has not been received
+  // b. For upstream session: MAX_PUSH_ID has been explicitly set to none
+  // In both cases, maxAllowedPushId_ == folly::none means that no push id
+  // is allowed. Default to kEightByteLimit assuming this session will
+  // be using push.
+  folly::Optional<hq::PushId> maxAllowedPushId_{folly::none};
 
   // Schedule the loop callback.
   // To keep this consistent with EventBase::runInLoop run in the next loop
@@ -750,7 +849,7 @@ class HQSession
   void scheduleLoopCallback(bool thisIteration = false);
 
   // helper functions for writes
-  void writeRequestStreams(uint64_t maxEgress) noexcept;
+  uint64_t writeRequestStreams(uint64_t maxEgress) noexcept;
   void scheduleWrite();
   void handleWriteError(HQStreamTransportBase* hqStream,
                         quic::QuicErrorCode err);
@@ -761,23 +860,8 @@ class HQSession
    */
   size_t handleWrite(HQStreamTransportBase* hqStream,
                      std::unique_ptr<folly::IOBuf> data,
-                     size_t length,
+                     size_t dataChainLen,
                      bool sendEof);
-
-  /**
-   * Wraps calls to the socket writeChain and handles the case where the
-   * transport gives data back to the caller. To be used for both request and
-   * control streams. Returns the number of bytes written from data if success,
-   * in case of error returns the transport error, and leaves error handling to
-   * the caller
-   */
-  folly::Expected<size_t, quic::LocalErrorCode> writeBase(
-      quic::StreamId id,
-      folly::IOBufQueue* writeBuf,
-      std::unique_ptr<folly::IOBuf> data,
-      size_t tryToSend,
-      bool sendEof,
-      quic::QuicSocket::DeliveryCallback* deliveryCallback = nullptr);
 
   /**
    * Helper function to perform writes on a single request stream
@@ -821,99 +905,6 @@ class HQSession
    */
   uint32_t countStreamsImpl(bool includeEgress = true,
                             bool includeIngress = true) const;
-
-  /**
-   * The following functions invoke a callback on all or on all non-detached
-   * request streams. It does an extra lookup per stream but it is safe. Note
-   * that if the callback *adds* streams, they will not get the callback.
-   */
-  template <typename... Args1, typename... Args2>
-  void invokeOnAllStreams(std::function<void(HQStreamTransportBase*)> fn) {
-    invokeOnStreamsImpl(
-        fn,
-        std::bind(&HQSession::findStream, this, std::placeholders::_1),
-        std::bind(&HQSession::findIngressPushStreamByPushId,
-                  this,
-                  std::placeholders::_1));
-  }
-
-  template <typename... Args1, typename... Args2>
-  void invokeOnEgressStreams(std::function<void(HQStreamTransportBase*)> fn,
-                             bool includeDetached = false) {
-    invokeOnStreamsImpl(fn,
-                        std::bind(&HQSession::findEgressStream,
-                                  this,
-                                  std::placeholders::_1,
-                                  includeDetached));
-  }
-
-  template <typename... Args1, typename... Args2>
-  void invokeOnIngressStreams(std::function<void(HQStreamTransportBase*)> fn,
-                              bool includeDetached = false) {
-    invokeOnStreamsImpl(fn,
-                        std::bind(&HQSession::findIngressStream,
-                                  this,
-                                  std::placeholders::_1,
-                                  includeDetached),
-                        std::bind(&HQSession::findIngressPushStreamByPushId,
-                                  this,
-                                  std::placeholders::_1));
-  }
-
-  template <typename... Args1, typename... Args2>
-  void invokeOnNonDetachedStreams(
-      std::function<void(HQStreamTransportBase*)> fn) {
-    invokeOnStreamsImpl(fn,
-                        std::bind(&HQSession::findNonDetachedStream,
-                                  this,
-                                  std::placeholders::_1));
-  }
-
-  // Apply the function on the streams found by the two locators.
-  // Note that same stream can be returned by a find-by-stream-id
-  // and find-by-push-id locators.
-  // This is mitigated by collecting the streams in an unordered set
-  // prior to application of the funtion
-  // Note that the function is allowed to delete a stream by invoking
-  // erase stream, but the locators are not allowed to do so.
-  // Note that neither the locators nor the function are allowed
-  // to call "invokeOnStreamsImpl"
-  template <typename... Args1, typename... Args2>
-  void invokeOnStreamsImpl(
-      std::function<void(HQStreamTransportBase*)> fn,
-      std::function<HQStreamTransportBase*(quic::StreamId)> findByStreamIdFn,
-      std::function<HQStreamTransportBase*(hq::PushId)> findByPushIdFn =
-          [](hq::PushId /* id */) { return nullptr; }) {
-    DestructorGuard g(this);
-    std::unordered_set<HQStreamTransportBase*> streams;
-    streams.reserve(numberOfStreams());
-
-    for (const auto& txn : streams_) {
-      HQStreamTransportBase* pstream = findByStreamIdFn(txn.first);
-      if (pstream) {
-        streams.insert(pstream);
-      }
-    }
-
-    for (const auto& txn : egressPushStreams_) {
-      HQStreamTransportBase* pstream = findByStreamIdFn(txn.first);
-      if (pstream) {
-        streams.insert(pstream);
-      }
-    }
-
-    for (const auto& txn : ingressPushStreams_) {
-      HQStreamTransportBase* pstream = findByPushIdFn(txn.first);
-      if (pstream) {
-        streams.insert(pstream);
-      }
-    }
-
-    for (HQStreamTransportBase* pstream : streams) {
-      CHECK(pstream);
-      fn(pstream);
-    }
-  }
 
   std::list<folly::AsyncTransport::ReplaySafetyCallback*>
       waitingForReplaySafety_;
@@ -980,6 +971,11 @@ class HQSession
       std::pair<std::pair<quic::QuicErrorCode, std::string>, ProxygenError>>
       dropInNextLoop_;
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4250) // inherits 'proxygen::detail::..' via dominance
+#endif
+
   // A control stream is created as egress first, then the ingress counterpart
   // is linked as soon as we read the stream preface on the associated stream
   class HQControlStream
@@ -998,7 +994,7 @@ class HQSession
     }
 
     void createEgressCodec() {
-      CHECK(type_.hasValue());
+      CHECK(type_.has_value());
       switch (*type_) {
         case hq::UnidirectionalStreamType::H1Q_CONTROL:
         case hq::UnidirectionalStreamType::CONTROL:
@@ -1078,7 +1074,7 @@ class HQSession
     bool readEOF_{false};
   };
 
- protected:
+ public:
   class HQStreamTransportBase
       : public HQStreamBase
       , public HTTPTransaction::Transport
@@ -1088,9 +1084,9 @@ class HQSession
     HQStreamTransportBase(
         HQSession& session,
         TransportDirection direction,
-        quic::StreamId id,
+        quic::StreamId streamId,
         uint32_t seqNo,
-        const WheelTimerInstance& timeout,
+        const WheelTimerInstance& wheelTimer,
         HTTPSessionStats* stats = nullptr,
         http2::PriorityUpdate priority = hqDefaultPriority,
         folly::Optional<HTTPCodec::StreamID> parentTxnId = HTTPCodec::NoStream,
@@ -1100,6 +1096,10 @@ class HQSession
                    const std::string& /* where */);
 
     void initIngress(const std::string& /* where */);
+
+    HTTPSessionBase* getHTTPSessionBase() override {
+      return &(getSession());
+    }
 
    public:
     HQStreamTransportBase() = delete;
@@ -1144,14 +1144,14 @@ class HQSession
                           HTTPCodec::StreamID /* controlStream */,
                           bool /* unidirectional */,
                           HTTPMessage* /* msg */) override {
-      LOG(ERROR) << __func__ << " txn=" << txn_ << " TODO";
+      LOG(ERROR) << "exMessage: txn=" << txn_ << " TODO";
     }
 
     virtual void onPushPromiseHeadersComplete(
         hq::PushId /* pushID */,
         HTTPCodec::StreamID /* assoc streamID */,
         std::unique_ptr<HTTPMessage> /* msg */) {
-      LOG(ERROR) << __func__ << " txn=" << txn_ << " TODO";
+      LOG(ERROR) << "push promise: txn=" << txn_ << " TODO";
     }
 
     void onHeadersComplete(HTTPCodec::StreamID streamID,
@@ -1163,7 +1163,9 @@ class HQSession
       VLOG(4) << __func__ << " txn=" << txn_;
       CHECK(chain);
       auto len = chain->computeChainDataLength();
-      session_.onBodyImpl(std::move(chain), len, padding, &txn_);
+      if (session_.onBodyImpl(std::move(chain), len, padding, &txn_)) {
+        session_.pauseReads();
+      };
     }
 
     void onUnframedBodyStarted(HTTPCodec::StreamID streamID,
@@ -1247,11 +1249,11 @@ class HQSession
       VLOG(4) << __func__ << " txn=" << txn_;
     }
 
-    void onPingRequest(uint64_t /* uniqueID */) override {
+    void onPingRequest(uint64_t /* data */) override {
       VLOG(4) << __func__ << " txn=" << txn_;
     }
 
-    void onPingReply(uint64_t /* uniqueID */) override {
+    void onPingReply(uint64_t /* data */) override {
       // This method should not get called
       LOG(FATAL) << __func__ << " txn=" << txn_;
     }
@@ -1293,22 +1295,16 @@ class HQSession
     }
 
     // HTTPTransaction::Transport methods
+
+    // For parity with H2, pause/resumeIngress now a no-op.  All transactions
+    // will pause when total buffered egress exceeds the configured limit, which
+    // should be equal to the recv flow control window
     void pauseIngress(HTTPTransaction* /* txn */) noexcept override {
       VLOG(4) << __func__ << " txn=" << txn_;
-      if (session_.sock_) {
-        if (hasIngressStreamId()) {
-          session_.sock_->pauseRead(getIngressStreamId());
-        }
-      } // else this is being torn down
     }
 
     void resumeIngress(HTTPTransaction* /* txn */) noexcept override {
       VLOG(4) << __func__ << " txn=" << txn_;
-      if (session_.sock_) {
-        if (hasIngressStreamId()) {
-          session_.sock_->resumeRead(getIngressStreamId());
-        }
-      } // else this is being torn down
     }
 
     void transactionTimeout(HTTPTransaction* /* txn */) noexcept override;
@@ -1376,7 +1372,9 @@ class HQSession
 
     void notifyIngressBodyProcessed(uint32_t bytes) noexcept override {
       VLOG(4) << __func__ << " txn=" << txn_;
-      session_.notifyBodyProcessed(bytes);
+      if (session_.notifyBodyProcessed(bytes)) {
+        session_.resumeReads();
+      }
     }
 
     void notifyEgressBodyBuffered(int64_t bytes) noexcept override {
@@ -1403,6 +1401,13 @@ class HQSession
 
     bool getCurrentTransportInfo(wangle::TransportInfo* tinfo) override;
 
+    void getFlowControlInfo(
+        HTTPTransaction::FlowControlInfo* /*info*/) override {
+      // Not implemented
+    }
+
+    HTTPTransaction::Transport::Type getSessionType() const noexcept override;
+
     virtual const HTTPCodec& getCodec() const noexcept override {
       return HQStreamBase::getCodec();
     }
@@ -1418,7 +1423,8 @@ class HQSession
 
     HTTPTransaction* newPushedTransaction(
         HTTPCodec::StreamID /* parentTxnId */,
-        HTTPTransaction::PushHandler* /* handler */) noexcept override {
+        HTTPTransaction::PushHandler* /* handler */,
+        ProxygenError* /* error */ = nullptr) noexcept override {
       LOG(FATAL) << __func__ << " Only available via request stream";
       folly::assume_unreachable();
     }
@@ -1458,7 +1464,7 @@ class HQSession
       return false;
     }
 
-    const folly::AsyncTransportWrapper* getUnderlyingTransport() const
+    const folly::AsyncTransport* getUnderlyingTransport() const
         noexcept override {
       VLOG(4) << __func__ << " txn=" << txn_;
       return nullptr;
@@ -1482,6 +1488,11 @@ class HQSession
                                        hqDefaultPriority.weight);
     }
 
+    folly::Optional<HTTPTransaction::ConnectionToken> getConnectionToken() const
+        noexcept override {
+      return session_.connectionToken_;
+    }
+
     void generateGoaway();
 
     // Partially reliable transport methods.
@@ -1496,8 +1507,7 @@ class HQSession
     folly::Expected<folly::Optional<uint64_t>, ErrorCode> rejectBodyTo(
         HTTPTransaction* txn, uint64_t nextBodyOffset) override;
 
-    folly::Expected<folly::Unit, ErrorCode> trackEgressBodyDelivery(
-        uint64_t bodyOffset) override;
+    void trackEgressBodyDelivery(uint64_t bodyOffset) override;
 
     uint64_t trimPendingEgressBody(uint64_t wireOffset);
 
@@ -1663,7 +1673,7 @@ class HQSession
 
     folly::Optional<HTTPCodec::StreamID> codecStreamId_;
 
-    ByteEventTracker byteEventTracker_;
+    HQByteEventTracker byteEventTracker_;
 
     // Stream + session protocol info
     std::shared_ptr<QuicStreamProtocolInfo> quicStreamProtocolInfo_;
@@ -1686,6 +1696,10 @@ class HQSession
     void handleHeadersAcked(uint64_t streamOffset);
     void handleBodyAcked(uint64_t streamOffset);
     void handleBodyCancelled(uint64_t streamOffset);
+    // Egress headers offset.
+    // This is updated every time we send headers. Needed for body delivery
+    // callbacks to calculate body offset properly.
+    uint64_t egressHeadersStreamOffset_{0};
     folly::Optional<uint64_t> egressHeadersAckOffset_;
     std::unordered_set<uint64_t> egressBodyAckOffsets_;
     // Track number of armed QUIC delivery callbacks.
@@ -1700,6 +1714,7 @@ class HQSession
     folly::Optional<hq::PushId> ingressPushId_;
   }; // HQStreamTransportBase
 
+ protected:
   class HQStreamTransport
       : public detail::singlestream::SSBidir
       , public HQStreamTransportBase {
@@ -1710,16 +1725,16 @@ class HQSession
         quic::StreamId streamId,
         uint32_t seqNo,
         std::unique_ptr<HTTPCodec> codec,
-        const WheelTimerInstance& timeout,
+        const WheelTimerInstance& wheelTimer,
         HTTPSessionStats* stats = nullptr,
         http2::PriorityUpdate priority = hqDefaultPriority,
         folly::Optional<HTTPCodec::StreamID> parentTxnId = HTTPCodec::NoStream)
         : detail::singlestream::SSBidir(streamId),
           HQStreamTransportBase(session,
                                 direction,
-                                static_cast<HTTPCodec::StreamID>(streamId),
+                                streamId,
                                 seqNo,
-                                timeout,
+                                wheelTimer,
                                 stats,
                                 priority,
                                 parentTxnId) {
@@ -1730,7 +1745,8 @@ class HQSession
 
     HTTPTransaction* newPushedTransaction(
         HTTPCodec::StreamID /* parentTxnId */,
-        HTTPTransaction::PushHandler* /* handler */) noexcept override;
+        HTTPTransaction::PushHandler* /* handler */,
+        ProxygenError* error = nullptr) noexcept override;
 
     void sendPushPromise(HTTPTransaction* /* txn */,
                          folly::Optional<hq::PushId> /* pushId */,
@@ -1745,147 +1761,9 @@ class HQSession
 
   }; // HQStreamTransport
 
-  /**
-   * Server side representation of a push stream
-   * Does not support ingress
-   */
-  class HQEgressPushStream
-      : public detail::singlestream::SSEgress
-      , public HQStreamTransportBase {
-   public:
-    HQEgressPushStream(HQSession& session,
-                       quic::StreamId streamId,
-                       hq::PushId pushId,
-                       folly::Optional<HTTPCodec::StreamID> parentTxnId,
-                       uint32_t seqNo,
-                       std::unique_ptr<HTTPCodec> codec,
-                       const WheelTimerInstance& timeout,
-                       HTTPSessionStats* stats = nullptr,
-                       http2::PriorityUpdate priority = hqDefaultPriority)
-        : detail::singlestream::SSEgress(streamId),
-          HQStreamTransportBase(session,
-                                TransportDirection::DOWNSTREAM,
-                                static_cast<HTTPCodec::StreamID>(pushId),
-                                seqNo,
-                                timeout,
-                                stats,
-                                priority,
-                                parentTxnId,
-                                hq::UnidirectionalStreamType::PUSH),
-          pushId_(pushId) {
-      // Request streams are eagerly initialized
-      initCodec(std::move(codec), __func__);
-      // DONT init ingress on egress-only stream
-    }
-
-    hq::PushId getPushId() const {
-      return pushId_;
-    }
-
-    // Unlike request streams and ingres push streams,
-    // the egress push stream does not have to flush
-    // ingress queues
-    void transactionTimeout(HTTPTransaction* txn) noexcept override {
-      VLOG(4) << __func__ << " txn=" << txn_;
-      DCHECK(txn == &txn_);
-    }
-
-    void sendPushPromise(HTTPTransaction* /* txn */,
-                         folly::Optional<hq::PushId> /* pushId */,
-                         const HTTPMessage& /* headers */,
-                         HTTPHeaderSize* /* outSize */,
-                         bool /* includeEOM */) override;
-
-    /**
-     * Write the encoded push id to the egress stream.
-     */
-    size_t generateStreamPushId();
-
-    // Egress only stream should not pause ingress
-    void pauseIngress(HTTPTransaction* /* txn */) noexcept override {
-      VLOG(4) << __func__ << " Ingress function called on egress-only stream, ignoring";
-    }
-
-    // Egress only stream should not pause ingress
-    void resumeIngress(HTTPTransaction* /* txn */) noexcept override {
-      VLOG(4) << __func__ << " Ingress function called on egress-only stream, ignoring";
-    }
-
-   private:
-    hq::PushId pushId_; // The push id in context of which this stream is sent
-  };                    // HQEgressPushStream
-
-  /**
-   * Client-side representation of a push stream.
-   * Does not support egress operations.
-   */
-  class HQIngressPushStream
-      : public detail::singlestream::SSIngress
-      , public HQSession::HQStreamTransportBase {
-   public:
-    HQIngressPushStream(HQSession& session,
-                        hq::PushId pushId,
-                        folly::Optional<HTTPCodec::StreamID> parentTxnId,
-                        uint32_t seqNo,
-                        const WheelTimerInstance& timeout,
-                        HTTPSessionStats* stats = nullptr,
-                        http2::PriorityUpdate priority = hqDefaultPriority)
-        : detail::singlestream::SSIngress(folly::none),
-          HQStreamTransportBase(session,
-                                TransportDirection::UPSTREAM,
-                                static_cast<HTTPCodec::StreamID>(pushId),
-                                seqNo,
-                                timeout,
-                                stats,
-                                priority,
-                                parentTxnId,
-                                hq::UnidirectionalStreamType::PUSH),
-          pushId_(pushId) {
-      // Ingress push streams are not initialized
-      // until after the nascent push stream
-      // has been received
-      // notify the testing callbacks that a half-opened push transaction
-      // has been created
-
-      // NOTE: change the API to avoid accepting parent txn ids
-      // as optional
-      CHECK(parentTxnId.has_value());
-      if (session_.serverPushLifecycleCb_) {
-        session_.serverPushLifecycleCb_->onHalfOpenPushedTxn(
-            &txn_, pushId, *parentTxnId, false);
-      }
-    }
-
-    // Bind this stream to a transport stream
-    void bindTo(quic::StreamId transportStreamId);
-
-    void onPushMessageBegin(HTTPCodec::StreamID pushId,
-                            HTTPCodec::StreamID parentTxnId,
-                            HTTPMessage* /* msg */) override {
-      LOG(ERROR) << __func__
-                 << "Push streams are not allowed to receive push promises"
-                 << " txn=" << txn_ << " pushID=" << pushId
-                 << " parentTxnId=" << parentTxnId;
-      session_.dropConnectionAsync(
-          std::make_pair(HTTP3::ErrorCode::HTTP_WRONG_STREAM,
-                         "Push promise over a push stream"),
-          kErrorConnection);
-    }
-
-    size_t sendAbortImpl(quic::ApplicationErrorCode /* errorCode */,
-                         std::string errorMsg) {
-      LOG(ERROR) << "No-op abort on ingress-only stream " << errorMsg;
-      return 0;
-    }
-
-    hq::PushId getPushId() const {
-      return pushId_;
-    }
-
-   private:
-    hq::PushId pushId_; // The push id in context of which this stream is
-                        // received
-  };                    // HQIngressPushStream
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
  private:
   class VersionUtils {
@@ -1923,30 +1801,27 @@ class HQSession
     virtual folly::Expected<uint64_t, hq::UnframedBodyOffsetTrackerError>
     onIngressPeekDataAvailable(uint64_t /* streamOffset */) {
       LOG(FATAL) << ": called in base class";
+      folly::assume_unreachable();
     }
     virtual folly::Expected<uint64_t, hq::UnframedBodyOffsetTrackerError>
     onIngressDataExpired(uint64_t /* streamOffset */) {
       LOG(FATAL) << ": called in base class";
+      folly::assume_unreachable();
     }
     virtual folly::Expected<uint64_t, hq::UnframedBodyOffsetTrackerError>
     onIngressDataRejected(uint64_t /* streamOffset */) {
-      LOG(FATAL) << ": called in base classn";
+      LOG(FATAL) << ": called in base class";
+      folly::assume_unreachable();
     }
     virtual folly::Expected<uint64_t, hq::UnframedBodyOffsetTrackerError>
     onEgressBodySkip(uint64_t /* bodyOffset */) {
       LOG(FATAL) << ": called in base class";
+      folly::assume_unreachable();
     }
     virtual folly::Expected<uint64_t, hq::UnframedBodyOffsetTrackerError>
     onEgressBodyReject(uint64_t /* bodyOffset */) {
       LOG(FATAL) << ": called in base class";
-    }
-    virtual hq::TrackerOffsetResult getEgressBodyOffset(
-        uint64_t /* streamOffset */) const {
-      LOG(FATAL) << ": called in base class";
-    }
-    virtual hq::TrackerOffsetResult appToStreamOffset(
-        uint64_t /* bodyOffset */) const {
-      LOG(FATAL) << ": called in base class";
+      folly::assume_unreachable();
     }
 
     HQSession& session_;
@@ -2087,12 +1962,6 @@ class HQSession
     folly::Expected<uint64_t, hq::UnframedBodyOffsetTrackerError>
     onEgressBodyReject(uint64_t bodyOffset) override;
 
-    hq::TrackerOffsetResult getEgressBodyOffset(
-        uint64_t streamOffset) const override;
-
-    hq::TrackerOffsetResult appToStreamOffset(
-        uint64_t bodyOffset) const override;
-
    private:
     QPACKCodec qpackCodec_;
     hq::HQStreamCodec* hqStreamCodecPtr_{nullptr};
@@ -2148,8 +2017,8 @@ class HQSession
     return 100;
   }
 
-  // This is the current method of creating new push IDs.
-  hq::PushId createNewPushId(quic::StreamId txnID);
+  HQStreamTransportBase* FOLLY_NULLABLE getPRStream(quic::StreamId id,
+                                                    const char* event);
 
   using HTTPCodecPtr = std::unique_ptr<HTTPCodec>;
   struct CodecStackEntry {
@@ -2167,18 +2036,6 @@ class HQSession
    */
   HTTP2PriorityQueue::NextEgressResult nextEgressResults_;
 
-  // Bidirectional transport streams
-  std::unordered_map<quic::StreamId, HQStreamTransport> streams_;
-
-  // Incoming server push streams. Since the incoming push streams
-  // can be created before transport stream
-  std::unordered_map<hq::PushId, HQIngressPushStream> ingressPushStreams_;
-
-  // Lookup maps for matching ingress push streams to push ids
-  PushToStreamMap streamLookup_;
-
-  std::unordered_map<quic::StreamId, HQEgressPushStream> egressPushStreams_;
-
   // Cleanup all pending streams. Invoked in session timeout
   size_t cleanupPendingStreams();
 
@@ -2189,14 +2046,11 @@ class HQSession
   std::unordered_map<hq::UnidirectionalStreamType, HQControlStream>
       controlStreams_;
   HQUnidirStreamDispatcher unidirectionalReadDispatcher_;
-  // Callback pointer used for correctness testing. Not used
-  // for session logic.
-  ServerPushLifecycleCallback* serverPushLifecycleCb_{nullptr};
 
   // Maximum Stream ID received so far
   quic::StreamId maxIncomingStreamId_{0};
   // Maximum Stream ID that we are allowed to open, according to the remote
-  quic::StreamId maxAllowedStreamId_{quic::kEightByteLimit};
+  quic::StreamId maxAllowedStreamId_{hq::kMaxClientBidiStreamId};
   // Whether SETTINGS have been received
   bool receivedSettings_{false};
 
@@ -2211,6 +2065,7 @@ class HQSession
   bool scheduledWrite_{false};
 
   bool forceUpstream1_1_{true};
+  bool writesPaused_{false};
 
   /** Reads in the current loop iteration */
   uint16_t readsPerLoop_{0};
@@ -2234,6 +2089,18 @@ class HQSession
   // NOTE: introduce better decoupling between the streams
   // and the containing session, then remove the friendship.
   friend class HQStreamBase;
+
+  // To let the operator<< access DrainState which is private
+  friend std::ostream& operator<<(std::ostream&, DrainState);
+
+  // Bidirectional transport streams
+  std::unordered_map<quic::StreamId, HQStreamTransport> streams_;
+
+  // Creation time (for handshake time tracking)
+  std::chrono::steady_clock::time_point createTime_;
+
 }; // HQSession
+
+std::ostream& operator<<(std::ostream& os, HQSession::DrainState drainState);
 
 } // namespace proxygen

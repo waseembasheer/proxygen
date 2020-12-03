@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/SynchronizedLruQuicPskCache.h>
 
 namespace proxygen {
@@ -20,6 +19,15 @@ folly::Optional<quic::QuicCachedPsk> SynchronizedLruQuicPskCache::getPsk(
   auto cacheMap = cache_.wlock();
   auto result = cacheMap->find(identity);
   if (result != cacheMap->end()) {
+    if (std::chrono::system_clock::now() >
+        result->second.cachedPsk.ticketExpirationTime) {
+      VLOG(1) << "PSK expired: " << identity << ", id: "
+              << (result->second.cachedPsk.serverCert
+                      ? result->second.cachedPsk.serverCert->getIdentity()
+                      : "none");
+      cacheMap->erase(result);
+      return folly::none;
+    }
     return result->second;
   } else {
     return folly::none;

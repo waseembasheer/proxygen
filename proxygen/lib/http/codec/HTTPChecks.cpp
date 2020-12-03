@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/HTTPChecks.h>
 
 #include <proxygen/lib/http/RFC2616.h>
@@ -16,11 +15,12 @@ namespace proxygen {
 void HTTPChecks::onHeadersComplete(StreamID stream,
                                    std::unique_ptr<HTTPMessage> msg) {
 
-  if (msg->isRequest() && (RFC2616::isRequestBodyAllowed(msg->getMethod())
-                           == RFC2616::BodyAllowed::NOT_ALLOWED) &&
+  if (msg->isRequest() &&
+      (RFC2616::isRequestBodyAllowed(msg->getMethod()) ==
+       RFC2616::BodyAllowed::NOT_ALLOWED) &&
       RFC2616::bodyImplied(msg->getHeaders())) {
-    HTTPException ex(
-      HTTPException::Direction::INGRESS, "RFC2616: Request Body Not Allowed");
+    HTTPException ex(HTTPException::Direction::INGRESS,
+                     "RFC2616: Request Body Not Allowed");
     ex.setProxygenError(kErrorParseHeader);
     // setting the status code means that the error is at the HTTP layer and
     // that parsing succeeded.
@@ -47,4 +47,4 @@ void HTTPChecks::generateHeader(folly::IOBufQueue& writeBuf,
   call_->generateHeader(writeBuf, stream, msg, eom, sizeOut);
 }
 
-}
+} // namespace proxygen

@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include "proxygen/lib/http/connpool/SessionPool.h"
@@ -24,8 +23,7 @@ namespace proxygen {
  */
 class ServerIdleSessionController {
  public:
-  explicit ServerIdleSessionController(unsigned int maxIdleCount = 2)
-      : maxIdleCount_(maxIdleCount) {
+  explicit ServerIdleSessionController() {
   }
 
   /**
@@ -44,6 +42,14 @@ class ServerIdleSessionController {
    * Stop all session transfers.
    */
   void markForDeath();
+
+  /**
+   * Resize idle pool.
+   */
+  void setMaxIdleCount(unsigned int maxIdleCount) {
+    std::lock_guard<std::mutex> lock(lock_);
+    maxIdleCount_ = maxIdleCount;
+  }
 
  protected:
   struct IdleSessionInfo {
@@ -79,7 +85,8 @@ class ServerIdleSessionController {
   std::unordered_map<const HTTPSessionBase*, IdleSessionListIter> sessionMap_;
   bool markedForDeath_{false};
 
-  const unsigned int maxIdleCount_;
+  // Default idle pool size to 2.
+  unsigned int maxIdleCount_{2};
 };
 
 } // namespace proxygen

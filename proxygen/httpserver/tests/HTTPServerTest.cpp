@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/httpserver/HTTPServer.h>
 #include <boost/thread.hpp>
 #include <folly/FileUtil.h>
@@ -16,24 +15,22 @@
 #include <folly/io/async/EventBaseManager.h>
 #include <folly/portability/GTest.h>
 #include <folly/ssl/OpenSSLCertUtils.h>
+#include <folly/ssl/OpenSSLPtrTypes.h>
 #include <proxygen/httpclient/samples/curl/CurlClient.h>
 #include <proxygen/httpserver/ResponseBuilder.h>
 #include <proxygen/httpserver/ScopedHTTPServer.h>
 #include <proxygen/lib/http/HTTPConnector.h>
 #include <proxygen/lib/utils/TestUtils.h>
-#include <wangle/client/ssl/SSLSession.h>
 
 using namespace folly;
 using namespace folly::ssl;
 using namespace proxygen;
-using namespace testing;
 using namespace CurlService;
 
-using folly::AsyncSSLSocket;
 using folly::AsyncServerSocket;
 using folly::EventBaseManager;
-using folly::SSLContext;
 using folly::SocketAddress;
+using folly::SSLContext;
 
 namespace {
 
@@ -48,8 +45,8 @@ class ServerThread {
   HTTPServer* server_{nullptr};
 
  public:
-
-  explicit ServerThread(HTTPServer* server) : server_(server) {}
+  explicit ServerThread(HTTPServer* server) : server_(server) {
+  }
   ~ServerThread() {
     if (server_) {
       server_->stop();
@@ -72,6 +69,57 @@ class ServerThread {
   }
 };
 
+/**
+ * Similar to ServerThread except it waits on a folly::Baton before exit the
+ * thread.
+ *
+ * The reason you need this is that when start() is run on one thread, the main
+ * EVB inside a HTTPServer is owned by a threadlocal which dies when thread
+ * exits, which is a time point you don't control. So if you have code that
+ * requires the EVB doesn't die (for example, the TestRepeatStopCalls test
+ * case), you'd want to delay the thread exit point until you are done with your
+ * stop() calls.
+ *
+ * A better solution would be to change the EVB ownership inside HTTPServer.
+ */
+class WaitableServerThread {
+ private:
+  boost::barrier barrier_{2};
+  std::thread t_;
+  HTTPServer* server_{nullptr};
+  folly::Baton<true, std::atomic> baton_;
+
+ public:
+  explicit WaitableServerThread(HTTPServer* server) : server_(server) {
+  }
+
+  ~WaitableServerThread() {
+    if (server_) {
+      server_->stop();
+    }
+    t_.join();
+  }
+
+  bool start() {
+    bool throws = false;
+    t_ = std::thread([&]() {
+      server_->start([&]() { barrier_.wait(); },
+                     [&](std::exception_ptr /*ex*/) {
+                       throws = true;
+                       server_ = nullptr;
+                       barrier_.wait();
+                     });
+      baton_.wait();
+    });
+    barrier_.wait();
+    return !throws;
+  }
+
+  void exitThread() {
+    baton_.post();
+  }
+};
+
 TEST(MultiBind, HandlesListenFailures) {
   SocketAddress addr("127.0.0.1", 0);
 
@@ -84,11 +132,7 @@ TEST(MultiBind, HandlesListenFailures) {
   int port = addr.getPort();
 
   std::vector<HTTPServer::IPConfig> ips = {
-    {
-      folly::SocketAddress("127.0.0.1", port),
-      HTTPServer::Protocol::HTTP
-    }
-  };
+      {folly::SocketAddress("127.0.0.1", port), HTTPServer::Protocol::HTTP}};
 
   HTTPServerOptions options;
   options.threads = 4;
@@ -103,7 +147,7 @@ TEST(MultiBind, HandlesListenFailures) {
   // to listen on a FD that another socket is listening on fails.
   try {
     socket->listen(1024);
-  } catch (const std::exception& ex) {
+  } catch (const std::exception&) {
     return;
   }
 
@@ -114,22 +158,25 @@ TEST(MultiBind, HandlesListenFailures) {
 TEST(HttpServerStartStop, TestRepeatStopCalls) {
   HTTPServerOptions options;
   auto server = std::make_unique<HTTPServer>(std::move(options));
-  auto st = std::make_unique<ServerThread>(server.get());
+  auto st = std::make_unique<WaitableServerThread>(server.get());
   EXPECT_TRUE(st->start());
 
   server->stop();
   // Calling stop again should be benign.
   server->stop();
+  // Let the WaitableServerThread exit
+  st->exitThread();
 }
 
 // Make an SSL connection to the server
 class Cb : public folly::AsyncSocket::ConnectCallback {
  public:
-  explicit Cb(folly::AsyncSSLSocket* sock) : sock_(sock) {}
+  explicit Cb(folly::AsyncSSLSocket* sock) : sock_(sock) {
+  }
   void connectSuccess() noexcept override {
     success = true;
     reusedSession = sock_->getSSLSessionReused();
-    session.reset(sock_->getSSLSession());
+    session = sock_->getSSLSessionV2();
     if (sock_->getPeerCertificate()) {
       // keeps this alive until Cb is destroyed, even if sock is closed
       auto cert = sock_->getPeerCertificate();
@@ -151,21 +198,18 @@ class Cb : public folly::AsyncSocket::ConnectCallback {
 
   bool success{false};
   bool reusedSession{false};
-  wangle::SSLSessionPtr session;
+  std::shared_ptr<folly::ssl::SSLSession> session;
   folly::AsyncSSLSocket* sock_{nullptr};
   folly::ssl::X509UniquePtr peerCert_{nullptr};
 };
 
 TEST(SSL, SSLTest) {
-  HTTPServer::IPConfig cfg{
-    folly::SocketAddress("127.0.0.1", 0),
-      HTTPServer::Protocol::HTTP};
+  HTTPServer::IPConfig cfg{folly::SocketAddress("127.0.0.1", 0),
+                           HTTPServer::Protocol::HTTP};
   wangle::SSLContextConfig sslCfg;
   sslCfg.isDefault = true;
   sslCfg.setCertificate(
-    kTestDir + "certs/test_cert1.pem",
-    kTestDir + "certs/test_key1.pem",
-    "");
+      kTestDir + "certs/test_cert1.pem", kTestDir + "certs/test_key1.pem", "");
   cfg.sslConfigs.push_back(sslCfg);
 
   HTTPServerOptions options;
@@ -195,15 +239,18 @@ class DummyFilterFactory : public RequestHandlerFactory {
  public:
   class DummyFilter : public Filter {
    public:
-    explicit DummyFilter(RequestHandler* upstream) : Filter(upstream) {}
+    explicit DummyFilter(RequestHandler* upstream) : Filter(upstream) {
+    }
   };
 
   RequestHandler* onRequest(RequestHandler* h, HTTPMessage*) noexcept override {
     return new DummyFilter(h);
   }
 
-  void onServerStart(folly::EventBase*) noexcept override {}
-  void onServerStop() noexcept override {}
+  void onServerStart(folly::EventBase*) noexcept override {
+  }
+  void onServerStop() noexcept override {
+  }
 };
 
 class TestHandlerFactory : public RequestHandlerFactory {
@@ -211,7 +258,8 @@ class TestHandlerFactory : public RequestHandlerFactory {
   class TestHandler : public RequestHandler {
     void onRequest(std::unique_ptr<HTTPMessage>) noexcept override {
     }
-    void onBody(std::unique_ptr<folly::IOBuf>) noexcept override {}
+    void onBody(std::unique_ptr<folly::IOBuf>) noexcept override {
+    }
     void onUpgrade(UpgradeProtocol) noexcept override {
     }
 
@@ -233,17 +281,23 @@ class TestHandlerFactory : public RequestHandlerFactory {
           .sendWithEOM();
     }
 
-    void requestComplete() noexcept override { delete this; }
+    void requestComplete() noexcept override {
+      delete this;
+    }
 
-    void onError(ProxygenError) noexcept override { delete this; }
+    void onError(ProxygenError) noexcept override {
+      delete this;
+    }
   };
 
   RequestHandler* onRequest(RequestHandler*, HTTPMessage*) noexcept override {
     return new TestHandler();
   }
 
-  void onServerStart(folly::EventBase*) noexcept override {}
-  void onServerStop() noexcept override {}
+  void onServerStart(folly::EventBase*) noexcept override {
+  }
+  void onServerStop() noexcept override {
+  }
 };
 
 std::pair<std::unique_ptr<HTTPServer>, std::unique_ptr<ServerThread>>
@@ -345,7 +399,7 @@ TEST(SSL, TestResumptionWithTickets) {
   ASSERT_FALSE(cb.reusedSession);
 
   folly::AsyncSSLSocket::UniquePtr sock2(new folly::AsyncSSLSocket(ctx, &evb));
-  sock2->setSSLSession(cb.session.get());
+  sock2->setSSLSessionV2(cb.session);
   Cb cb2(sock2.get());
   sock2->connect(&cb2, server->addresses().front().address, 1000);
   evb.loop();
@@ -376,7 +430,7 @@ TEST(SSL, TestResumptionAfterUpdateFails) {
   server->updateTicketSeeds(newSeeds);
 
   folly::AsyncSSLSocket::UniquePtr sock2(new folly::AsyncSSLSocket(ctx, &evb));
-  sock2->setSSLSession(cb.session.get());
+  sock2->setSSLSessionV2(cb.session);
   Cb cb2(sock2.get());
   sock2->connect(&cb2, server->addresses().front().address, 1000);
   evb.loop();
@@ -385,7 +439,7 @@ TEST(SSL, TestResumptionAfterUpdateFails) {
   ASSERT_FALSE(cb2.reusedSession);
 
   folly::AsyncSSLSocket::UniquePtr sock3(new folly::AsyncSSLSocket(ctx, &evb));
-  sock3->setSSLSession(cb2.session.get());
+  sock3->setSSLSessionV2(cb2.session);
   Cb cb3(sock3.get());
   sock3->connect(&cb3, server->addresses().front().address, 1000);
   evb.loop();
@@ -398,7 +452,7 @@ TEST(SSL, TestUpdateTLSCredentials) {
   // Set up a temporary file with credentials that we will update
   folly::test::TemporaryFile credFile;
   auto copyCreds = [path = credFile.path()](const std::string& certFile,
-                                        const std::string& keyFile) {
+                                            const std::string& keyFile) {
     std::string certData, keyData;
     folly::readFile(certFile.c_str(), certData);
     folly::writeFile(certData, path.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
@@ -553,7 +607,6 @@ TEST(UseExistingSocket, TestWithSocketFd) {
   std::vector<HTTPServer::IPConfig> ips{cfg};
   server->bind(ips);
 
-
   EXPECT_TRUE(st->start());
 
   auto socketFd = server->getListenSocket();
@@ -565,7 +618,7 @@ TEST(UseExistingSocket, TestWithMultipleSocketFds) {
   serverSocket->bind(0);
   try {
     serverSocket->bind(1024);
-  } catch (const std::exception& ex) {
+  } catch (const std::exception&) {
     // This is fine because we are trying to bind to multiple ports
   }
 
@@ -588,7 +641,6 @@ TEST(UseExistingSocket, TestWithMultipleSocketFds) {
   std::vector<HTTPServer::IPConfig> ips{cfg};
   server->bind(ips);
 
-
   EXPECT_TRUE(st->start());
 
   auto socketFd = server->getListenSocket();
@@ -606,8 +658,7 @@ class ScopedServerTest : public testing::Test {
   }
 
  protected:
-  std::unique_ptr<ScopedHTTPServer>
-  createScopedServer() {
+  std::unique_ptr<ScopedHTTPServer> createScopedServer() {
     auto opts = createDefaultOpts();
     auto res = ScopedHTTPServer::start(cfg_, std::move(opts));
     auto addresses = res->getAddresses();
@@ -621,34 +672,29 @@ class ScopedServerTest : public testing::Test {
     URL url(folly::to<std::string>("https://localhost:", address_.getPort()));
     HTTPHeaders headers;
     auto client = std::make_unique<CurlClient>(
-      &evb_, HTTPMethod::GET, url, nullptr, headers, "");
+        &evb_, HTTPMethod::GET, url, nullptr, headers, "");
     client->setFlowControlSettings(64 * 1024);
     client->setLogging(false);
     client->initializeSsl(caFile, "http/1.1", certFile, keyFile);
     HTTPConnector connector(client.get(), timer_.get());
-    connector.connectSSL(
-      &evb_,
-      address_,
-      client->getSSLContext(),
-      nullptr,
-      std::chrono::milliseconds(1000));
+    connector.connectSSL(&evb_,
+                         address_,
+                         client->getSSLContext(),
+                         nullptr,
+                         std::chrono::milliseconds(1000));
     evb_.loop();
     return client;
   }
 
   std::unique_ptr<CurlClient> connectPlainText() {
-    URL url(
-        folly::to<std::string>("http://localhost:", address_.getPort()));
+    URL url(folly::to<std::string>("http://localhost:", address_.getPort()));
     HTTPHeaders headers;
     auto client = std::make_unique<CurlClient>(
-      &evb_, HTTPMethod::GET, url, nullptr, headers, "");
+        &evb_, HTTPMethod::GET, url, nullptr, headers, "");
     client->setFlowControlSettings(64 * 1024);
     client->setLogging(false);
     HTTPConnector connector(client.get(), timer_.get());
-    connector.connect(
-      &evb_,
-      address_,
-      std::chrono::milliseconds(1000));
+    connector.connect(&evb_, address_, std::chrono::milliseconds(1000));
     evb_.loop();
     return client;
   }
@@ -656,7 +702,7 @@ class ScopedServerTest : public testing::Test {
   virtual HTTPServerOptions createDefaultOpts() {
     HTTPServerOptions res;
     res.handlerFactories =
-      RequestHandlerChain().addThen<TestHandlerFactory>().build();
+        RequestHandlerChain().addThen<TestHandlerFactory>().build();
     res.threads = 4;
     return res;
   }
@@ -664,9 +710,8 @@ class ScopedServerTest : public testing::Test {
   folly::EventBase evb_;
   folly::SocketAddress address_;
   HHWheelTimer::UniquePtr timer_;
-  HTTPServer::IPConfig cfg_{
-      folly::SocketAddress("127.0.0.1", 0),
-        HTTPServer::Protocol::HTTP};
+  HTTPServer::IPConfig cfg_{folly::SocketAddress("127.0.0.1", 0),
+                            HTTPServer::Protocol::HTTP};
 };
 
 TEST_F(ScopedServerTest, Start) {
@@ -679,10 +724,7 @@ TEST_F(ScopedServerTest, Start) {
 TEST_F(ScopedServerTest, StartStrictSSL) {
   wangle::SSLContextConfig sslCfg;
   sslCfg.isDefault = true;
-  sslCfg.setCertificate(
-    "/path/should/not/exist",
-    "/path/should/not/exist",
-    "");
+  sslCfg.setCertificate("/path/should/not/exist", "/path/should/not/exist", "");
   cfg_.sslConfigs.push_back(sslCfg);
   EXPECT_THROW(createScopedServer(), std::exception);
 }
@@ -690,10 +732,7 @@ TEST_F(ScopedServerTest, StartStrictSSL) {
 TEST_F(ScopedServerTest, StartNotStrictSSL) {
   wangle::SSLContextConfig sslCfg;
   sslCfg.isDefault = true;
-  sslCfg.setCertificate(
-    "/path/should/not/exist",
-    "/path/should/not/exist",
-    "");
+  sslCfg.setCertificate("/path/should/not/exist", "/path/should/not/exist", "");
   cfg_.strictSSL = false;
   cfg_.sslConfigs.push_back(sslCfg);
   auto server = createScopedServer();
@@ -706,9 +745,7 @@ TEST_F(ScopedServerTest, StartSSLWithInsecure) {
   wangle::SSLContextConfig sslCfg;
   sslCfg.isDefault = true;
   sslCfg.setCertificate(
-    kTestDir + "certs/test_cert1.pem",
-    kTestDir + "certs/test_key1.pem",
-    "");
+      kTestDir + "certs/test_cert1.pem", kTestDir + "certs/test_key1.pem", "");
   cfg_.sslConfigs.push_back(sslCfg);
   cfg_.allowInsecureConnectionsOnSecureServer = true;
   auto server = createScopedServer();
@@ -733,7 +770,7 @@ class ConnectionFilterTest : public ScopedServerTest {
                                    .addThen<TestHandlerFactory>()
                                    .build();
     options.newConnectionFilter =
-        [](const folly::AsyncTransportWrapper* sock,
+        [](const folly::AsyncTransport* sock,
            const folly::SocketAddress* /* address */,
            const std::string& /* nextProtocolName */,
            wangle::SecureTransportType /* secureTransportType */,

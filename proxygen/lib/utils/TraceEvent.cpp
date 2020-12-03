@@ -1,22 +1,21 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/utils/TraceEvent.h>
 
 #include <atomic>
+#include <folly/json.h>
 #include <sstream>
 #include <string>
-#include <folly/json.h>
 
 namespace proxygen {
 
-  // Helpers used to make TraceEventType/TraceFieldType can be used with GLOG
+// Helpers used to make TraceEventType/TraceFieldType can be used with GLOG
 std::ostream& operator<<(std::ostream& os, TraceEventType eventType) {
   os << getTraceEventTypeString(eventType);
   return os;
@@ -27,9 +26,8 @@ std::ostream& operator<<(std::ostream& os, TraceFieldType fieldType) {
   return os;
 }
 
-TraceEvent::TraceEvent(TraceEventType type, uint32_t parentID):
-  type_(type),
-  parentID_(parentID) {
+TraceEvent::TraceEvent(TraceEventType type, uint32_t parentID)
+    : type_(type), parentID_(parentID) {
   static std::atomic<uint32_t> counter(0);
   id_ = counter++;
 }
@@ -83,9 +81,11 @@ bool TraceEvent::addMetaInternal(TraceFieldType key, MetaData&& value) {
 std::string TraceEvent::toString() const {
   std::ostringstream out;
   int startSinceEpoch = std::chrono::duration_cast<std::chrono::milliseconds>(
-    start_.time_since_epoch()).count();
+                            start_.time_since_epoch())
+                            .count();
   int endSinceEpoch = std::chrono::duration_cast<std::chrono::milliseconds>(
-    end_.time_since_epoch()).count();
+                          end_.time_since_epoch())
+                          .count();
   out << "TraceEvent(";
   out << "type='" << getTraceEventTypeString(type_) << "', ";
   out << "id='" << id_ << "', ";
@@ -113,8 +113,8 @@ std::string TraceEvent::MetaData::ConvVisitor<std::string>::operator()(
   return folly::toJson(data);
 }
 
-std::ostream& operator << (std::ostream& out, const TraceEvent& event) {
+std::ostream& operator<<(std::ostream& out, const TraceEvent& event) {
   out << event.toString();
   return out;
 }
-}
+} // namespace proxygen

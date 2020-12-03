@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include "proxygen/lib/http/connpool/SessionPool.h"
 #include "proxygen/lib/http/connpool/ServerIdleSessionController.h"
 #include "proxygen/lib/http/connpool/ThreadIdleSessionController.h"
@@ -112,7 +111,9 @@ HTTPTransaction* SessionPool::getTransaction(
 void SessionPool::purgeExcessIdleSessions() {
   auto thresh = std::chrono::steady_clock::now() - getTimeout();
 
-  int64_t excess = idleSessionList_.size() - getMaxIdleSessions();
+  CHECK_LE(idleSessionList_.size(), std::numeric_limits<uint32_t>::max());
+  int64_t excess =
+      static_cast<int64_t>(idleSessionList_.size()) - getMaxIdleSessions();
   while (!idleSessionList_.empty()) {
     SessionHolder* holder = &idleSessionList_.front();
     if (holder->getLastUseTime() > thresh && excess <= 0) {

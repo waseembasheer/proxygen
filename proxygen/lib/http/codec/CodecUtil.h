@@ -1,24 +1,35 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <assert.h>
 #include <cctype>
 #include <folly/Range.h>
-#include <stdint.h>
-#include <string>
-#include <proxygen/lib/utils/UtilInl.h>
 #include <proxygen/lib/http/HTTPMessage.h>
 #include <proxygen/lib/http/codec/compress/Header.h>
+#include <proxygen/lib/utils/UtilInl.h>
+#include <stdint.h>
+#include <string>
 
 namespace proxygen {
+
+/**
+ * On some mobile platforms we don't always get a chance to stop proxygen
+ * eventbase. That leads to static object being cleaned up by system while
+ * proxygen tries to access them, which is bad. The speedup from making
+ * some variable static isn't necessary on mobile clients anyway.
+ */
+#ifdef FOLLY_MOBILE
+#define CODEC_STATIC
+#else
+#define CODEC_STATIC static
+#endif
 
 class CodecUtil {
  public:
@@ -30,9 +41,13 @@ class CodecUtil {
     return proxygen::validateURL(url);
   }
 
+  static bool isalpha(uint8_t c) {
+    return ((unsigned int)(c | 32) - 97) < 26U;
+  }
+
   static bool validateMethod(folly::ByteRange method) {
-    for (auto p: method) {
-      if (!isalpha(p)) {
+    for (auto p : method) {
+      if (!CodecUtil::isalpha(p)) {
         // methods are all characters
         return false;
       }
@@ -44,7 +59,7 @@ class CodecUtil {
     if (name.size() == 0) {
       return false;
     }
-    for (auto p: name) {
+    for (auto p : name) {
       if (p < 0x80 && http_tokens[(uint8_t)p] != p) {
         return false;
       }
@@ -58,19 +73,17 @@ class CodecUtil {
    * When mode is COMPLIANT, then this is allowed.
    * When mode is STRICT, no escaped CTLs are allowed
    */
-  enum CtlEscapeMode {
-    COMPLIANT,
-    STRICT
-  };
+  enum CtlEscapeMode { COMPLIANT, STRICT };
 
-  static bool validateHeaderValue(folly::ByteRange value,
-                                  CtlEscapeMode mode) {
+  static bool validateHeaderValue(folly::ByteRange value, CtlEscapeMode mode) {
     bool escape = false;
     bool quote = false;
-    enum { lws_none,
-           lws_expect_nl,
-           lws_expect_ws1,
-           lws_expect_ws2 } state = lws_none;
+    enum {
+      lws_none,
+      lws_expect_nl,
+      lws_expect_ws1,
+      lws_expect_ws2
+    } state = lws_none;
 
     for (auto p = std::begin(value); p != std::end(value); ++p) {
       if (escape) {
@@ -137,15 +150,19 @@ class CodecUtil {
     return !escape && (state == lws_none || state == lws_expect_ws2);
   }
 
-  static bool hasGzipAndDeflate(const std::string& value, bool& hasGzip,
+  static bool hasGzipAndDeflate(const std::string& value,
+                                bool& hasGzip,
                                 bool& hasDeflate);
-
-  static std::vector<compress::Header> prepareMessageForCompression(
-      const HTTPMessage& msg,
-      std::vector<std::string>& temps);
 
   static bool appendHeaders(const HTTPHeaders& inputHeaders,
                             std::vector<compress::Header>& headers,
                             HTTPHeaderCode headerToCheck);
+
+  static const std::bitset<256>& perHopHeaderCodes();
 };
-}
+
+void updateMessagePriorityFromPriorityString(HTTPMessage& msg);
+void updateMessagePriorityFromPriorityString(HTTPMessage& msg,
+                                             folly::StringPiece prioritySP);
+
+} // namespace proxygen

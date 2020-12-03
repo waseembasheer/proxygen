@@ -1,22 +1,17 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include "proxygen/lib/http/session/test/HQSessionMocks.h"
 #include <proxygen/lib/http/session/test/HTTPSessionMocks.h>
 #include <proxygen/lib/http/session/test/HTTPTransactionMocks.h>
 
 using namespace proxygen;
-using namespace proxygen::hq;
-using namespace quic;
-using namespace folly;
 using namespace testing;
-using namespace std::chrono;
 /**
  * A test case to validate that mocks exported by HQsesion
  * work correctly

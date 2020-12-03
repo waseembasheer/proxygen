@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/lib/http/HTTPMessage.h>
@@ -20,8 +19,7 @@ namespace proxygen {
 
 class HTTP1xCodec : public HTTPCodec {
  public:
-  explicit HTTP1xCodec(TransportDirection direction,
-                       bool forceUpstream1_1 = false);
+  explicit HTTP1xCodec(TransportDirection direction, bool force1_1 = false);
   ~HTTP1xCodec() override;
 
   HTTP1xCodec(HTTP1xCodec&&) = default;
@@ -45,18 +43,28 @@ class HTTP1xCodec : public HTTPCodec {
     return transportDirection_;
   }
   StreamID createStream() override;
-  void setCallback(Callback* callback) override { callback_ = callback; }
+  void setCallback(Callback* callback) override {
+    callback_ = callback;
+  }
   bool isBusy() const override;
   void setParserPaused(bool paused) override;
   size_t onIngress(const folly::IOBuf& buf) override;
   void onIngressEOF() override;
   bool isReusable() const override;
-  bool isWaitingToDrain() const override { return false; }
+  bool isWaitingToDrain() const override {
+    return disableKeepalivePending_ && keepalive_;
+  }
   // If the session has been upgraded we will send EOF (or RST if needed)
   // on egress complete
-  bool closeOnEgressComplete() const override { return egressUpgrade_; }
-  bool supportsParallelRequests() const override { return false; }
-  bool supportsPushTransactions() const override { return false; }
+  bool closeOnEgressComplete() const override {
+    return egressUpgrade_;
+  }
+  bool supportsParallelRequests() const override {
+    return false;
+  }
+  bool supportsPushTransactions() const override {
+    return false;
+  }
   void generateHeader(folly::IOBufQueue& writeBuf,
                       StreamID txn,
                       const HTTPMessage& msg,
@@ -75,16 +83,22 @@ class HTTP1xCodec : public HTTPCodec {
   size_t generateTrailers(folly::IOBufQueue& writeBuf,
                           StreamID txn,
                           const HTTPHeaders& trailers) override;
-  size_t generateEOM(folly::IOBufQueue& writeBuf,
-                     StreamID txn) override;
+  size_t generateEOM(folly::IOBufQueue& writeBuf, StreamID txn) override;
   size_t generateRstStream(folly::IOBufQueue& writeBuf,
                            StreamID txn,
                            ErrorCode statusCode) override;
   size_t generateGoaway(
-    folly::IOBufQueue& writeBuf,
-    StreamID lastStream,
-    ErrorCode statusCode,
-    std::unique_ptr<folly::IOBuf> debugData = nullptr) override;
+      folly::IOBufQueue& writeBuf,
+      StreamID lastStream,
+      ErrorCode statusCode,
+      std::unique_ptr<folly::IOBuf> debugData = nullptr) override;
+
+  size_t generateImmediateGoaway(folly::IOBufQueue&,
+                                 ErrorCode,
+                                 std::unique_ptr<folly::IOBuf>) override {
+    keepalive_ = false;
+    return 0;
+  }
 
   void setAllowedUpgradeProtocols(std::list<std::string> protocols);
   const std::string& getAllowedUpgradeProtocols();
@@ -116,7 +130,7 @@ class HTTP1xCodec : public HTTPCodec {
   enum class KeepaliveRequested : uint8_t {
     UNSET,
     ENABLED,  // incoming message requested keepalive
-    DISABLED,   // incoming message disabled keepalive
+    DISABLED, // incoming message disabled keepalive
   };
 
   void addDateHeader(folly::IOBufQueue& writeBuf, size_t& len);
@@ -124,13 +138,13 @@ class HTTP1xCodec : public HTTPCodec {
   /** Check whether we're currently parsing ingress message headers */
   bool isParsingHeaders() const {
     return (headerParseState_ > HeaderParseState::kParsingHeaderIdle) &&
-       (headerParseState_ < HeaderParseState::kParsingHeadersComplete);
+           (headerParseState_ < HeaderParseState::kParsingHeadersComplete);
   }
 
   /** Check whether we're currently parsing ingress header-or-trailer name */
   bool isParsingHeaderOrTrailerName() const {
     return (headerParseState_ == HeaderParseState::kParsingHeaderName) ||
-        (headerParseState_ == HeaderParseState::kParsingTrailerName);
+           (headerParseState_ == HeaderParseState::kParsingTrailerName);
   }
 
   /** Invoked when a parsing error occurs. It will send an exception to
@@ -143,8 +157,9 @@ class HTTP1xCodec : public HTTPCodec {
   void pushHeaderNameAndValue(HTTPHeaders& hdrs);
 
   /** Serialize websocket headers into a buffer **/
-  void serializeWebsocketHeader(folly::IOBufQueue& writeBuf, size_t& len,
-      bool upstream);
+  void serializeWebsocketHeader(folly::IOBufQueue& writeBuf,
+                                size_t& len,
+                                bool upstream);
 
   // Parser callbacks
   int onMessageBegin();
@@ -179,30 +194,30 @@ class HTTP1xCodec : public HTTPCodec {
   TransportDirection transportDirection_;
   KeepaliveRequested keepaliveRequested_; // only used in DOWNSTREAM mode
   std::pair<CodecProtocol, std::string> upgradeResult_; // DOWNSTREAM only
-  bool forceUpstream1_1_:1; // Use HTTP/1.1 upstream even if msg is 1.0
-  bool parserActive_:1;
-  bool pendingEOF_:1;
-  bool parserPaused_:1;
-  bool parserError_:1;
-  bool requestPending_:1;
-  bool responsePending_:1;
-  bool egressChunked_:1;
-  bool inChunk_:1;
-  bool lastChunkWritten_:1;
-  bool keepalive_:1;
-  bool disableKeepalivePending_:1;
+  bool force1_1_ : 1; // Use HTTP/1.1 even if msg is 1.0
+  bool parserActive_ : 1;
+  bool pendingEOF_ : 1;
+  bool parserPaused_ : 1;
+  bool parserError_ : 1;
+  bool requestPending_ : 1;
+  bool responsePending_ : 1;
+  bool egressChunked_ : 1;
+  bool inChunk_ : 1;
+  bool lastChunkWritten_ : 1;
+  bool keepalive_ : 1;
+  bool disableKeepalivePending_ : 1;
   // TODO: replace the 2 booleans below with an enum "request method"
-  bool connectRequest_:1;
-  bool headRequest_:1;
-  bool expectNoResponseBody_:1;
-  bool mayChunkEgress_:1;
-  bool is1xxResponse_:1;
-  bool inRecvLastChunk_:1;
-  bool ingressUpgrade_:1;
-  bool ingressUpgradeComplete_:1;
-  bool egressUpgrade_:1;
-  bool nativeUpgrade_:1;
-  bool headersComplete_:1;
+  bool connectRequest_ : 1;
+  bool headRequest_ : 1;
+  bool expectNoResponseBody_ : 1;
+  bool mayChunkEgress_ : 1;
+  bool is1xxResponse_ : 1;
+  bool inRecvLastChunk_ : 1;
+  bool ingressUpgrade_ : 1;
+  bool ingressUpgradeComplete_ : 1;
+  bool egressUpgrade_ : 1;
+  bool nativeUpgrade_ : 1;
+  bool headersComplete_ : 1;
 
   // C-callable wrappers for the http_parser callbacks
   static int onMessageBeginCB(http_parser* parser);
@@ -213,7 +228,8 @@ class HTTP1xCodec : public HTTPCodec {
   static int onHeaderFieldCB(http_parser* parser, const char* buf, size_t len);
   static int onHeaderValueCB(http_parser* parser, const char* buf, size_t len);
   static int onHeadersCompleteCB(http_parser* parser,
-                                 const char* buf, size_t len);
+                                 const char* buf,
+                                 size_t len);
   static int onBodyCB(http_parser* parser, const char* buf, size_t len);
   static int onChunkHeaderCB(http_parser* parser);
   static int onChunkCompleteCB(http_parser* parser);
@@ -222,4 +238,4 @@ class HTTP1xCodec : public HTTPCodec {
   static const http_parser_settings* getParserSettings();
 };
 
-} // proxygen
+} // namespace proxygen

@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/HQControlCodec.h>
 #include <proxygen/lib/http/HTTP3ErrorCode.h>
 #include <proxygen/lib/http/codec/HQUtils.h>
@@ -15,7 +14,6 @@
 
 namespace proxygen { namespace hq {
 
-using namespace folly;
 using namespace folly::io;
 
 ParseResult HQControlCodec::checkFrameAllowed(FrameType type) {
@@ -35,19 +33,19 @@ ParseResult HQControlCodec::checkFrameAllowed(FrameType type) {
     }
     // multiple SETTINGS frames are not allowed
     if (receivedSettings_ && type == hq::FrameType::SETTINGS) {
-      return HTTP3::ErrorCode::HTTP_UNEXPECTED_FRAME;
+      return HTTP3::ErrorCode::HTTP_FRAME_UNEXPECTED;
     }
     // A server MUST treat receipt of a GOAWAY frame as a connection error
-    // of type HTTP_UNEXPECTED_FRAME
+    // of type HTTP_FRAME_UNEXPECTED
     if (transportDirection_ == TransportDirection::DOWNSTREAM &&
         type == hq::FrameType::GOAWAY) {
-      return HTTP3::ErrorCode::HTTP_UNEXPECTED_FRAME;
+      return HTTP3::ErrorCode::HTTP_FRAME_UNEXPECTED;
     }
     // A client MUST treat the receipt of a MAX_PUSH_ID frame as a connection
-    // error of type HTTP_UNEXPECTED_FRAME
+    // error of type HTTP_FRAME_UNEXPECTED
     if (transportDirection_ == TransportDirection::UPSTREAM &&
         type == hq::FrameType::MAX_PUSH_ID) {
-      return HTTP3::ErrorCode::HTTP_UNEXPECTED_FRAME;
+      return HTTP3::ErrorCode::HTTP_FRAME_UNEXPECTED;
     }
   }
 
@@ -55,17 +53,10 @@ ParseResult HQControlCodec::checkFrameAllowed(FrameType type) {
   if (getStreamType() == hq::UnidirectionalStreamType::H1Q_CONTROL &&
       (transportDirection_ == TransportDirection::DOWNSTREAM ||
        type != hq::FrameType::GOAWAY)) {
-    return HTTP3::ErrorCode::HTTP_UNEXPECTED_FRAME;
+    return HTTP3::ErrorCode::HTTP_FRAME_UNEXPECTED;
   }
 
   return folly::none;
-}
-
-ParseResult HQControlCodec::parsePriority(Cursor& cursor,
-                                          const FrameHeader& header) {
-  PriorityUpdate outPriority;
-  auto res = hq::parsePriority(cursor, header, outPriority);
-  return res;
 }
 
 ParseResult HQControlCodec::parseCancelPush(Cursor& cursor,
@@ -91,11 +82,6 @@ ParseResult HQControlCodec::parseSettings(Cursor& cursor,
       case hq::SettingId::HEADER_TABLE_SIZE:
       case hq::SettingId::MAX_HEADER_LIST_SIZE:
       case hq::SettingId::QPACK_BLOCKED_STREAMS:
-        break;
-      case hq::SettingId::NUM_PLACEHOLDERS:
-        if (transportDirection_ == TransportDirection::DOWNSTREAM) {
-          return HTTP3::ErrorCode::HTTP_WRONG_SETTING_DIRECTION;
-        }
         break;
       default:
         continue; // ignore unknown settings
@@ -161,10 +147,6 @@ size_t HQControlCodec::generateSettings(folly::IOBufQueue& writeBuf) {
         case hq::SettingId::HEADER_TABLE_SIZE:
         case hq::SettingId::MAX_HEADER_LIST_SIZE:
         case hq::SettingId::QPACK_BLOCKED_STREAMS:
-          break;
-        case hq::SettingId::NUM_PLACEHOLDERS:
-          CHECK_NE(setting.value, 0);
-          CHECK_EQ(transportDirection_, TransportDirection::DOWNSTREAM);
           break;
       }
       settings.emplace_back(*id, (SettingValue)setting.value);

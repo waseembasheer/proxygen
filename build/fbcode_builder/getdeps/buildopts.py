@@ -1,23 +1,22 @@
-# Copyright (c) 2019-present, Facebook, Inc.
-# All rights reserved.
+# Copyright (c) Facebook, Inc. and its affiliates.
 #
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree. An additional grant
-# of patent rights can be found in the PATENTS file in the same directory.
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
 
 from __future__ import absolute_import, division, print_function, unicode_literals
 
-import base64
 import errno
 import glob
-import hashlib
 import ntpath
 import os
 import subprocess
 import sys
 import tempfile
 
-from .envfuncs import Env, add_path_entry, path_search
+from .copytree import containing_repo_type
+from .envfuncs import Env, add_path_entry
+from .fetcher import get_fbsource_repo_data
+from .manifest import ContextGenerator
 from .platform import HostType, is_windows
 
 
@@ -27,17 +26,22 @@ except ImportError:
     pass
 
 
-def containing_repo_type(path):
-    while True:
-        if os.path.exists(os.path.join(path, ".git")):
-            return ("git", path)
-        if os.path.exists(os.path.join(path, ".hg")):
-            return ("hg", path)
+def detect_project(path):
+    repo_type, repo_root = containing_repo_type(path)
+    if repo_type is None:
+        return None, None
 
-        parent = os.path.dirname(path)
-        if parent == path:
-            return None
-        path = parent
+    # Look for a .projectid file.  If it exists, read the project name from it.
+    project_id_path = os.path.join(repo_root, ".projectid")
+    try:
+        with open(project_id_path, "r") as f:
+            project_name = f.read().strip()
+            return repo_root, project_name
+    except EnvironmentError as ex:
+        if ex.errno != errno.ENOENT:
+            raise
+
+    return repo_root, None
 
 
 class BuildOptions(object):
@@ -50,24 +54,26 @@ class BuildOptions(object):
         num_jobs=0,
         use_shipit=False,
         vcvars_path=None,
+        allow_system_packages=False,
+        lfs_path=None,
     ):
-        """ fbcode_builder_dir - the path to either the in-fbsource fbcode_builder dir,
-                                 or for shipit-transformed repos, the build dir that
-                                 has been mapped into that dir.
-            scratch_dir - a place where we can store repos and build bits.
-                          This path should be stable across runs and ideally
-                          should not be in the repo of the project being built,
-                          but that is ultimately where we generally fall back
-                          for builds outside of FB
-            install_dir - where the project will ultimately be installed
-            num_jobs - the level of concurrency to use while building
-            use_shipit - use real shipit instead of the simple shipit transformer
-            vcvars_path - Path to external VS toolchain's vsvarsall.bat
+        """fbcode_builder_dir - the path to either the in-fbsource fbcode_builder dir,
+                             or for shipit-transformed repos, the build dir that
+                             has been mapped into that dir.
+        scratch_dir - a place where we can store repos and build bits.
+                      This path should be stable across runs and ideally
+                      should not be in the repo of the project being built,
+                      but that is ultimately where we generally fall back
+                      for builds outside of FB
+        install_dir - where the project will ultimately be installed
+        num_jobs - the level of concurrency to use while building
+        use_shipit - use real shipit instead of the simple shipit transformer
+        vcvars_path - Path to external VS toolchain's vsvarsall.bat
         """
         if not num_jobs:
             import multiprocessing
 
-            num_jobs = multiprocessing.cpu_count()
+            num_jobs = multiprocessing.cpu_count() // 2
 
         if not install_dir:
             install_dir = os.path.join(scratch_dir, "installed")
@@ -79,11 +85,13 @@ class BuildOptions(object):
                 self.project_hashes = hashes
                 break
 
-        # Use a simplistic heuristic to figure out if we're in fbsource
-        # and where the root of fbsource can be found
-        repo_type, repo_root = containing_repo_type(fbcode_builder_dir)
-        if repo_type == "hg":
-            self.fbsource_dir = repo_root
+        # Detect what repository and project we are being run from.
+        self.repo_root, self.repo_project = detect_project(os.getcwd())
+
+        # If we are running from an fbsource repository, set self.fbsource_dir
+        # to allow the ShipIt-based fetchers to use it.
+        if self.repo_project == "fbsource":
+            self.fbsource_dir = self.repo_root
         else:
             self.fbsource_dir = None
 
@@ -93,28 +101,39 @@ class BuildOptions(object):
         self.fbcode_builder_dir = fbcode_builder_dir
         self.host_type = host_type
         self.use_shipit = use_shipit
+        self.allow_system_packages = allow_system_packages
+        self.lfs_path = lfs_path
         if vcvars_path is None and is_windows():
 
             # On Windows, the compiler is not available in the PATH by
             # default so we need to run the vcvarsall script to populate the
             # environment. We use a glob to find some version of this script
-            # as deployed with Visual Studio 2017.  This logic will need
-            # updating when we switch to a newer compiler.
-            vcvarsall = glob.glob(
-                os.path.join(
-                    os.environ["ProgramFiles(x86)"],
-                    "Microsoft Visual Studio",
-                    "2017",
-                    "*",
-                    "VC",
-                    "Auxiliary",
-                    "Build",
-                    "vcvarsall.bat",
+            # as deployed with Visual Studio 2017.  This logic can also
+            # locate Visual Studio 2019 but note that at the time of writing
+            # the version of boost in our manifest cannot be built with
+            # VS 2019, so we're effectively tied to VS 2017 until we upgrade
+            # the boost dependency.
+            vcvarsall = []
+            for year in ["2017", "2019"]:
+                vcvarsall += glob.glob(
+                    os.path.join(
+                        os.environ["ProgramFiles(x86)"],
+                        "Microsoft Visual Studio",
+                        year,
+                        "*",
+                        "VC",
+                        "Auxiliary",
+                        "Build",
+                        "vcvarsall.bat",
+                    )
                 )
-            )
             vcvars_path = vcvarsall[0]
 
         self.vcvars_path = vcvars_path
+
+    @property
+    def manifests_dir(self):
+        return os.path.join(self.fbcode_builder_dir, "manifests")
 
     def is_darwin(self):
         return self.host_type.is_darwin()
@@ -128,110 +147,129 @@ class BuildOptions(object):
     def is_linux(self):
         return self.host_type.is_linux()
 
-    def _compute_hash(self, hash_by_name, manifest, manifests_by_name, ctx):
-        """ This recursive function computes a hash for a given manifest.
-        The hash takes into account some environmental factors on the
-        host machine and includes the hashes of its dependencies.
-        No caching of the computation is performed, which is theoretically
-        wasteful but the computation is fast enough that it is not required
-        to cache across multiple invocations. """
-
-        h = hash_by_name.get(manifest.name, None)
-        if h is not None:
-            return h
-
-        hasher = hashlib.sha256()
-        # Some environmental and configuration things matter
-        env = {}
-        env["install_dir"] = self.install_dir
-        env["scratch_dir"] = self.scratch_dir
-        env["os"] = self.host_type.ostype
-        env["distro"] = self.host_type.distro
-        env["distro_vers"] = self.host_type.distrovers
-        for name in ["CXXFLAGS", "CPPFLAGS", "LDFLAGS", "CXX", "CC"]:
-            env[name] = os.environ.get(name)
-        for tool in ["cc", "c++", "gcc", "g++", "clang", "clang++"]:
-            env["tool-%s" % tool] = path_search(os.environ, tool)
-
-        fetcher = manifest.create_fetcher(self, ctx)
-        env["fetcher.hash"] = fetcher.hash()
-
-        for name in sorted(env.keys()):
-            hasher.update(name.encode("utf-8"))
-            value = env.get(name)
-            if value is not None:
-                hasher.update(value.encode("utf-8"))
-
-        manifest.update_hash(hasher, ctx)
-
-        dep_list = sorted(manifest.get_section_as_dict("dependencies", ctx).keys())
-        for dep in dep_list:
-            dep_hash = self._compute_hash(
-                hash_by_name, manifests_by_name[dep], manifests_by_name, ctx
-            )
-            hasher.update(dep_hash.encode("utf-8"))
-
-        # Use base64 to represent the hash, rather than the simple hex digest,
-        # so that the string is shorter.  Use the URL-safe encoding so that
-        # the hash can also be safely used as a filename component.
-        h = base64.urlsafe_b64encode(hasher.digest()).decode("ascii")
-        # ... and because cmd.exe is troublesome with `=` signs, nerf those.
-        # They tend to be padding characters at the end anyway, so we can
-        # safely discard them.
-        h = h.replace("=", "")
-        hash_by_name[manifest.name] = h
-
-        return h
-
-    def compute_dirs(self, manifest, fetcher, manifests_by_name, ctx):
-        hash_by_name = {}
-        hash = self._compute_hash(hash_by_name, manifest, manifests_by_name, ctx)
-
-        if manifest.is_first_party_project():
-            directory = manifest.name
+    def get_context_generator(self, host_tuple=None, facebook_internal=None):
+        """ Create a manifest ContextGenerator for the specified target platform. """
+        if host_tuple is None:
+            host_type = self.host_type
+        elif isinstance(host_tuple, HostType):
+            host_type = host_tuple
         else:
-            directory = "%s-%s" % (manifest.name, hash)
+            host_type = HostType.from_tuple_string(host_tuple)
 
-        build_dir = os.path.join(self.scratch_dir, "build", directory)
-        inst_dir = os.path.join(self.install_dir, directory)
+        # facebook_internal is an Optional[bool]
+        # If it is None, default to assuming this is a Facebook-internal build if
+        # we are running in an fbsource repository.
+        if facebook_internal is None:
+            facebook_internal = self.fbsource_dir is not None
 
-        return {"build_dir": build_dir, "inst_dir": inst_dir, "hash": hash}
+        return ContextGenerator(
+            {
+                "os": host_type.ostype,
+                "distro": host_type.distro,
+                "distro_vers": host_type.distrovers,
+                "fb": "on" if facebook_internal else "off",
+                "test": "off",
+            }
+        )
 
-    def compute_env_for_install_dirs(self, install_dirs, env=None):
-        if env:
+    def compute_env_for_install_dirs(self, install_dirs, env=None, manifest=None):
+        if env is not None:
             env = env.copy()
         else:
             env = Env()
+
+        env["GETDEPS_BUILD_DIR"] = os.path.join(self.scratch_dir, "build")
+        env["GETDEPS_INSTALL_DIR"] = self.install_dir
+
+        # On macOS we need to set `SDKROOT` when we use clang for system
+        # header files.
+        if self.is_darwin() and "SDKROOT" not in env:
+            sdkroot = subprocess.check_output(["xcrun", "--show-sdk-path"])
+            env["SDKROOT"] = sdkroot.decode().strip()
+
+        if self.fbsource_dir:
+            env["YARN_YARN_OFFLINE_MIRROR"] = os.path.join(
+                self.fbsource_dir, "xplat/third-party/yarn/offline-mirror"
+            )
+            yarn_exe = "yarn.bat" if self.is_windows() else "yarn"
+            env["YARN_PATH"] = os.path.join(
+                self.fbsource_dir, "xplat/third-party/yarn/", yarn_exe
+            )
+            node_exe = "node-win-x64.exe" if self.is_windows() else "node"
+            env["NODE_BIN"] = os.path.join(
+                self.fbsource_dir, "xplat/third-party/node/bin/", node_exe
+            )
+            env["RUST_VENDORED_CRATES_DIR"] = os.path.join(
+                self.fbsource_dir, "third-party/rust/vendor"
+            )
+            hash_data = get_fbsource_repo_data(self)
+            env["FBSOURCE_HASH"] = hash_data.hash
+            env["FBSOURCE_DATE"] = hash_data.date
 
         lib_path = None
         if self.is_darwin():
             lib_path = "DYLD_LIBRARY_PATH"
         elif self.is_linux():
             lib_path = "LD_LIBRARY_PATH"
+        elif self.is_windows():
+            lib_path = "PATH"
         else:
             lib_path = None
 
         for d in install_dirs:
-            add_path_entry(env, "CMAKE_PREFIX_PATH", d)
-
-            pkgconfig = os.path.join(d, "lib/pkgconfig")
-            if os.path.exists(pkgconfig):
-                add_path_entry(env, "PKG_CONFIG_PATH", pkgconfig)
-
-            # Allow resolving shared objects built earlier (eg: zstd
-            # doesn't include the full path to the dylib in its linkage
-            # so we need to give it an assist)
-            if lib_path:
-                for lib in ["lib", "lib64"]:
-                    libdir = os.path.join(d, lib)
-                    if os.path.exists(libdir):
-                        add_path_entry(env, lib_path, libdir)
-
-            # Allow resolving binaries (eg: cmake, ninja) and dlls
-            # built by earlier steps
             bindir = os.path.join(d, "bin")
-            if os.path.exists(bindir):
-                add_path_entry(env, "PATH", bindir, append=False)
+
+            if not (
+                manifest and manifest.get("build", "disable_env_override_pkgconfig")
+            ):
+                pkgconfig = os.path.join(d, "lib/pkgconfig")
+                if os.path.exists(pkgconfig):
+                    add_path_entry(env, "PKG_CONFIG_PATH", pkgconfig)
+
+                pkgconfig = os.path.join(d, "lib64/pkgconfig")
+                if os.path.exists(pkgconfig):
+                    add_path_entry(env, "PKG_CONFIG_PATH", pkgconfig)
+
+            if not (manifest and manifest.get("build", "disable_env_override_path")):
+                add_path_entry(env, "CMAKE_PREFIX_PATH", d)
+
+                # Allow resolving shared objects built earlier (eg: zstd
+                # doesn't include the full path to the dylib in its linkage
+                # so we need to give it an assist)
+                if lib_path:
+                    for lib in ["lib", "lib64"]:
+                        libdir = os.path.join(d, lib)
+                        if os.path.exists(libdir):
+                            add_path_entry(env, lib_path, libdir)
+
+                # Allow resolving binaries (eg: cmake, ninja) and dlls
+                # built by earlier steps
+                if os.path.exists(bindir):
+                    add_path_entry(env, "PATH", bindir, append=False)
+
+            # If rustc is present in the `bin` directory, set RUSTC to prevent
+            # cargo uses the rustc installed in the system.
+            if self.is_windows():
+                cargo_path = os.path.join(bindir, "cargo.exe")
+                rustc_path = os.path.join(bindir, "rustc.exe")
+                rustdoc_path = os.path.join(bindir, "rustdoc.exe")
+            else:
+                cargo_path = os.path.join(bindir, "cargo")
+                rustc_path = os.path.join(bindir, "rustc")
+                rustdoc_path = os.path.join(bindir, "rustdoc")
+
+            if os.path.isfile(rustc_path):
+                env["CARGO_BIN"] = cargo_path
+                env["RUSTC"] = rustc_path
+                env["RUSTDOC"] = rustdoc_path
+
+            openssl_include = os.path.join(d, "include/openssl")
+            if os.path.isdir(openssl_include) and any(
+                os.path.isfile(os.path.join(d, "lib", libcrypto))
+                for libcrypto in ("libcrypto.lib", "libcrypto.so", "libcrypto.a")
+            ):
+                # This must be the openssl library, let Rust know about it
+                env["OPENSSL_DIR"] = d
 
         return env
 
@@ -362,9 +400,20 @@ def setup_build_options(args, host_type=None):
                 munged = fbcode_builder_dir.replace("Z", "zZ")
                 for s in ["/", "\\", ":"]:
                     munged = munged.replace(s, "Z")
-                scratch_dir = os.path.join(
-                    tempfile.gettempdir(), "fbcode_builder_getdeps-%s" % munged
-                )
+
+                if is_windows() and os.path.isdir("c:/open"):
+                    temp = "c:/open/scratch"
+                else:
+                    temp = tempfile.gettempdir()
+
+                scratch_dir = os.path.join(temp, "fbcode_builder_getdeps-%s" % munged)
+                if not is_windows() and os.geteuid() == 0:
+                    # Running as root; in the case where someone runs
+                    # sudo getdeps.py install-system-deps
+                    # and then runs as build without privs, we want to avoid creating
+                    # a scratch dir that the second stage cannot write to.
+                    # So we generate a different path if we are root.
+                    scratch_dir += "-root"
 
         if not os.path.exists(scratch_dir):
             os.makedirs(scratch_dir)
@@ -382,7 +431,10 @@ def setup_build_options(args, host_type=None):
     # Make sure we normalize the scratch path.  This path is used as part of the hash
     # computation for detecting if projects have been updated, so we need to always
     # use the exact same string to refer to a given directory.
-    scratch_dir = os.path.realpath(scratch_dir)
+    # But! realpath in some combinations of Windows/Python3 versions can expand the
+    # drive substitutions on Windows, so avoid that!
+    if not is_windows():
+        scratch_dir = os.path.realpath(scratch_dir)
 
     host_type = _check_host_type(args, host_type)
 
@@ -394,4 +446,6 @@ def setup_build_options(args, host_type=None):
         num_jobs=args.num_jobs,
         use_shipit=args.use_shipit,
         vcvars_path=args.vcvars_path,
+        allow_system_packages=args.allow_system_packages,
+        lfs_path=args.lfs_path,
     )

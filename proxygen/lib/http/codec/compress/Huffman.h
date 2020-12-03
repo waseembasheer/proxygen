@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/FBString.h>
@@ -31,13 +30,14 @@ const uint32_t kEOSHpack = 0x3fffffff;
  */
 struct HuffNode {
   union {
-    uint8_t ch;   // leafs hold characters
+    uint8_t ch; // leafs hold characters
     uint8_t superNodeIndex;
   } data{0};
   struct {
-    uint8_t bits:4; // how many bits are used for representing ch, range is 0-8
-    bool isSuperNode:1;
-  } metadata{0,false};
+    uint8_t bits : 4; // how many bits are used for representing ch, range is
+                      // 0-8
+    bool isSuperNode : 1;
+  } metadata{0, false};
 
   bool isLeaf() const {
     return !metadata.isSuperNode;
@@ -89,7 +89,8 @@ class HuffTree {
    */
   explicit HuffTree(const uint32_t* codes, const uint8_t* bits);
   explicit HuffTree(HuffTree&& tree) = default;
-  ~HuffTree() {}
+  ~HuffTree() {
+  }
 
   /**
    * decode bitstream into a string literal
@@ -100,7 +101,8 @@ class HuffTree {
    *
    * @return true if the decode process was successful
    */
-  bool decode(const uint8_t* buf, uint32_t size,
+  bool decode(const uint8_t* buf,
+              uint32_t size,
               folly::fbstring& literal) const;
 
   /**
@@ -138,8 +140,11 @@ class HuffTree {
   const uint8_t* bitsTable() const;
 
  private:
-  void fillIndex(SuperHuffNode& snode, uint32_t code, uint8_t bits, uint8_t ch,
-     uint8_t level);
+  void fillIndex(SuperHuffNode& snode,
+                 uint32_t code,
+                 uint8_t bits,
+                 uint8_t ch,
+                 uint8_t level);
   void buildTree();
   void insert(uint32_t code, uint8_t bits, uint8_t ch);
 
@@ -154,4 +159,4 @@ class HuffTree {
 
 const HuffTree& huffTree();
 
-}}
+}} // namespace proxygen::huffman

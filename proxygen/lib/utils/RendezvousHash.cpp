@@ -1,24 +1,22 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/utils/RendezvousHash.h>
-#include <folly/container/Foreach.h>
-#include <folly/hash/Hash.h>
-#include <map>
 #include <algorithm>
-#include <vector>
+#include <folly/hash/Hash.h>
 #include <limits>
-#include <math.h>       /* pow */
+#include <map>
+#include <math.h> /* pow */
+#include <vector>
 
 namespace proxygen {
-void RendezvousHash::build(std::vector<std::pair<
-                           std::string, uint64_t> >&nodes) {
+void RendezvousHash::build(
+    std::vector<std::pair<std::string, uint64_t>>& nodes) {
   for (auto it = nodes.begin(); it != nodes.end(); ++it) {
     std::string key = it->first;
     uint64_t weight = it->second;
@@ -146,14 +144,15 @@ size_t RendezvousHash::getNthByWeightedHash(
   if (modRank != 0) {
     scaledWeights.reserve(weights_.size());
   }
-  FOR_EACH_ENUMERATE(i, entry, weights_) {
+  for (size_t i = 0; i < weights_.size(); ++i) {
+    const auto& entry = weights_[i];
     // combine the hash with the cluster together
-    double combinedHash = computeHash(entry->first + key);
+    double combinedHash = computeHash(entry.first + key);
     double scaledHash =
         (double)combinedHash / std::numeric_limits<uint64_t>::max();
     double scaledWeight = 0;
-    if (entry->second != 0) {
-      scaledWeight = pow(scaledHash, (double)1 / entry->second);
+    if (entry.second != 0) {
+      scaledWeight = pow(scaledHash, (double)1 / entry.second);
     }
     if (modRank == 0) {
       if (scaledWeight > maxWeight) {
@@ -223,4 +222,4 @@ double RendezvousHash::getMaxErrorRate() const {
   return 0;
 }
 
-}
+} // namespace proxygen

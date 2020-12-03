@@ -1,17 +1,16 @@
 /*
- *  Copyright (c) 2018-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <folly/Range.h>
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBuf.h>
-#include <glog/logging.h>
 #include <folly/portability/GTest.h>
+#include <glog/logging.h>
 #include <proxygen/lib/http/codec/compress/Header.h>
 #include <proxygen/lib/http/codec/compress/HeaderCodec.h>
 #include <proxygen/lib/http/codec/compress/QPACKCodec.h>
@@ -19,27 +18,25 @@
 #include <proxygen/lib/http/codec/compress/test/TestUtil.h>
 #include <vector>
 
-using namespace folly::io;
 using namespace folly;
 using namespace proxygen::compress;
 using namespace proxygen::hpack;
 using namespace proxygen;
 using namespace std;
-using namespace testing;
 
 namespace {
 void headersEq(vector<Header>& headerVec, compress::HeaderPieceList& headers) {
   size_t i = 0;
   EXPECT_EQ(headerVec.size() * 2, headers.size());
-  for (auto& h: headerVec) {
+  for (auto& h : headerVec) {
     string name = *h.name;
-    char *mutableName = (char *)name.data();
+    char* mutableName = (char*)name.data();
     folly::toLowerAscii(mutableName, name.size());
     EXPECT_EQ(name, headers[i++].str);
     EXPECT_EQ(*h.value, headers[i++].str);
   }
 }
-}
+} // namespace
 
 class QPACKTests : public testing::Test {
  public:
@@ -89,8 +86,8 @@ TEST_F(QPACKTests, TestSimple) {
   auto result = cb.getResult();
   EXPECT_TRUE(!result.hasError());
   headersEq(req, result->headers);
-  EXPECT_GT(client.getCompressionInfo().egressHeadersStored_, 0);
-  EXPECT_GT(server.getCompressionInfo().ingressHeadersStored_, 0);
+  EXPECT_GT(client.getCompressionInfo().egress.headersStored_, 0);
+  EXPECT_GT(server.getCompressionInfo().ingress.headersStored_, 0);
 }
 
 TEST_F(QPACKTests, TestAbsoluteIndex) {
@@ -101,7 +98,7 @@ TEST_F(QPACKTests, TestAbsoluteIndex) {
     for (int j = 0; j < 32; j++) {
       int value = (i >> 1) * 32 + j; // duplicate the last flight
       headers.emplace_back(
-        vector<string>({string("foomonkey"), folly::to<string>(value)}));
+          vector<string>({string("foomonkey"), folly::to<string>(value)}));
     }
     auto req = headersFromArray(headers);
     auto encodeResult = client.encode(req, i + 1);
@@ -120,8 +117,8 @@ TEST_F(QPACKTests, TestAbsoluteIndex) {
     EXPECT_TRUE(!result.hasError());
     headersEq(req, result->headers);
   }
-  EXPECT_GT(client.getCompressionInfo().egressHeadersStored_, 0);
-  EXPECT_GT(server.getCompressionInfo().ingressHeadersStored_, 0);
+  EXPECT_GT(client.getCompressionInfo().egress.headersStored_, 0);
+  EXPECT_GT(server.getCompressionInfo().ingress.headersStored_, 0);
 }
 
 TEST_F(QPACKTests, TestWithQueue) {
@@ -143,8 +140,8 @@ TEST_F(QPACKTests, TestWithQueue) {
     for (int i = 0; i < 4; i++) {
       auto reqI = req;
       for (int j = 0; j < 2; j++) {
-        reqI.emplace_back(HTTP_HEADER_CONNECTION, values[
-                            std::max(f * 4 + i - j * 8, 0)]);
+        reqI.emplace_back(HTTP_HEADER_CONNECTION,
+                          values[std::max(f * 4 + i - j * 8, 0)]);
       }
       VLOG(4) << "Encoding req=" << f * 4 + i;
       auto res = client.encode(reqI, f * 4 + i);
@@ -160,7 +157,7 @@ TEST_F(QPACKTests, TestWithQueue) {
       controlFrames.pop_front();
       server.decodeEncoderStream(std::move(control));
     }
-    for (auto i: insertOrder) {
+    for (auto i : insertOrder) {
       auto& encodedReq = data[i].first;
       auto len = encodedReq->computeChainDataLength();
       server.decodeStreaming(i, std::move(encodedReq), len, &data[i].second);
@@ -171,7 +168,7 @@ TEST_F(QPACKTests, TestWithQueue) {
       server.decodeEncoderStream(std::move(control));
     }
     int i = 0;
-    for (auto& d: data) {
+    for (auto& d : data) {
       auto result = d.second.getResult();
       EXPECT_TRUE(!result.hasError());
       auto reqI = req;
@@ -188,16 +185,15 @@ TEST_F(QPACKTests, TestWithQueue) {
   // Skipping redundant table adds reduces the HOL block count
   EXPECT_EQ(server.getHolBlockCount(), 30);
 
-  EXPECT_GT(client.getCompressionInfo().egressHeadersStored_, 0);
-  EXPECT_GT(server.getCompressionInfo().ingressHeadersStored_, 0);
+  EXPECT_GT(client.getCompressionInfo().egress.headersStored_, 0);
+  EXPECT_GT(server.getCompressionInfo().ingress.headersStored_, 0);
 }
 
 TEST_F(QPACKTests, HeaderCodecStats) {
   vector<vector<string>> headers = {
-    {"Content-Length", "80"},
-    {"Content-Encoding", "gzip"},
-    {"X-FB-Debug", "eirtijvdgtccffkutnbttcgbfieghgev"}
-  };
+      {"Content-Length", "80"},
+      {"Content-Encoding", "gzip"},
+      {"X-FB-Debug", "eirtijvdgtccffkutnbttcgbfieghgev"}};
   vector<Header> resp = headersFromArray(headers);
 
   TestHeaderCodecStats stats(HeaderCodec::Type::QPACK);

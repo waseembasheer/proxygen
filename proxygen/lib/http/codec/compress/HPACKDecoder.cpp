@@ -1,27 +1,22 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/compress/HPACKDecoder.h>
 
 #include <proxygen/lib/http/codec/compress/HeaderCodec.h>
 
-using folly::IOBuf;
 using folly::io::Cursor;
-using std::unique_ptr;
-using proxygen::HPACK::DecodeError;
 
 namespace proxygen {
 
-void HPACKDecoder::decodeStreaming(
-    Cursor& cursor,
-    uint32_t totalBytes,
-    HPACK::StreamingCallback* streamingCb) {
+void HPACKDecoder::decodeStreaming(Cursor& cursor,
+                                   uint32_t totalBytes,
+                                   HPACK::StreamingCallback* streamingCb) {
   HPACKDecodeBuffer dbuf(cursor, totalBytes, maxUncompressed_);
   uint32_t emittedSize = 0;
 
@@ -29,16 +24,19 @@ void HPACKDecoder::decodeStreaming(
     emittedSize += decodeHeader(dbuf, streamingCb, nullptr);
 
     if (emittedSize > maxUncompressed_) {
-      LOG(ERROR) << "exceeded uncompressed size limit of "
-                 << maxUncompressed_ << " bytes";
+      LOG(ERROR) << "exceeded uncompressed size limit of " << maxUncompressed_
+                 << " bytes";
       err_ = HPACK::DecodeError::HEADERS_TOO_LARGE;
       break;
     }
     emittedSize += 2;
   }
   auto compressedSize = dbuf.consumedBytes();
-  completeDecode(HeaderCodec::Type::HPACK, streamingCb, compressedSize,
-                 compressedSize, emittedSize);
+  completeDecode(HeaderCodec::Type::HPACK,
+                 streamingCb,
+                 compressedSize,
+                 compressedSize,
+                 emittedSize);
 }
 
 uint32_t HPACKDecoder::decodeLiteralHeader(
@@ -48,7 +46,7 @@ uint32_t HPACKDecoder::decodeLiteralHeader(
   uint8_t byte = dbuf.peek();
   bool indexing = byte & HPACK::LITERAL_INC_INDEX.code;
   HPACKHeader header;
-  uint8_t indexMask = 0x3F;  // 0011 1111
+  uint8_t indexMask = 0x3F; // 0011 1111
   uint8_t length = HPACK::LITERAL_INC_INDEX.prefixLength;
   if (!indexing) {
     // bool neverIndex = byte & HPACK::LITERAL_NEV_INDEX.code;
@@ -115,7 +113,7 @@ uint32_t HPACKDecoder::decodeIndexedHeader(
     return 0;
   }
 
-  auto& header = getHeader(index);
+  const auto& header = getHeader(index);
   return emit(header, streamingCb, emitted);
 }
 
@@ -127,10 +125,9 @@ bool HPACKDecoder::isValid(uint32_t index) {
   }
 }
 
-uint32_t HPACKDecoder::decodeHeader(
-    HPACKDecodeBuffer& dbuf,
-    HPACK::StreamingCallback* streamingCb,
-    headers_t* emitted) {
+uint32_t HPACKDecoder::decodeHeader(HPACKDecodeBuffer& dbuf,
+                                    HPACK::StreamingCallback* streamingCb,
+                                    headers_t* emitted) {
   uint8_t byte = dbuf.peek();
   if (byte & HPACK::INDEX_REF.code) {
     return decodeIndexedHeader(dbuf, streamingCb, emitted);
@@ -144,4 +141,4 @@ uint32_t HPACKDecoder::decodeHeader(
   return decodeLiteralHeader(dbuf, streamingCb, emitted);
 }
 
-}
+} // namespace proxygen

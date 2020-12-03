@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <folly/init/Init.h>
 #include <folly/portability/GFlags.h>
 
@@ -15,9 +14,7 @@
 #include <proxygen/lib/http/codec/compress/HPACKHeader.h>
 
 DEFINE_string(input, "", "File containing requests");
-DEFINE_string(scheme,
-              "qpack",
-              "Scheme: <qpack|qmin|hpack>");
+DEFINE_string(scheme, "qpack", "Scheme: <qpack|qmin|hpack>");
 
 DEFINE_int32(rtt, 100, "Simulated RTT");
 DEFINE_double(lossp, 0.0, "Loss Probability");
@@ -27,7 +24,8 @@ DEFINE_int32(ooo_thresh, 0, "First seqn to allow ooo");
 DEFINE_int32(table_size, 4096, "HPACK dynamic table size");
 DEFINE_int64(seed, 0, "RNG seed");
 DEFINE_bool(blend, true, "Blend all facebook.com and fbcdn.net domains");
-DEFINE_int32(max_blocking, 100,
+DEFINE_int32(max_blocking,
+             100,
              "Maximum number of vulnerable/blocking header blocks");
 DEFINE_bool(same_packet_compression,
             true,

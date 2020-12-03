@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <folly/Random.h>
 #include <folly/ScopeGuard.h>
 #include <folly/io/Cursor.h>
@@ -19,7 +18,6 @@
 using namespace folly;
 using namespace proxygen;
 using namespace std;
-using namespace testing;
 
 namespace {
 
@@ -139,9 +137,8 @@ TEST_F(ZlibTests, CompressDecompressStreaming) {
 TEST_F(ZlibTests, CompressDecompressSmallBuffer) {
   ASSERT_NO_FATAL_FAILURE({
     auto oldFlag = FLAGS_zlib_compressor_buffer_growth;
-    auto guard = folly::makeGuard([&] {
-      FLAGS_zlib_compressor_buffer_growth = oldFlag;
-    });
+    auto guard = folly::makeGuard(
+        [&] { FLAGS_zlib_compressor_buffer_growth = oldFlag; });
     // NB: This is picked intentionally so we don't generate multiple
     // zlib flush markers as ZlibStreamDecompressor fatals on them.
     FLAGS_zlib_compressor_buffer_growth = 10;

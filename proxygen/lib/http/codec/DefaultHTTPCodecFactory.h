@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2018-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 #include <proxygen/lib/http/codec/HTTPCodecFactory.h>
 
@@ -27,8 +26,9 @@ class DefaultHTTPCodecFactory : public HTTPCodecFactory {
   void setForceHTTP1xCodecTo1_1(bool forceHTTP1xCodecTo1_1) {
     forceHTTP1xCodecTo1_1_ = forceHTTP1xCodecTo1_1;
   }
+
  protected:
   bool forceHTTP1xCodecTo1_1_{false};
 };
 
-} // proxygen
+} // namespace proxygen

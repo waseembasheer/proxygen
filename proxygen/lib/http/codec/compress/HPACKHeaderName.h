@@ -1,22 +1,22 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <algorithm>
-#include <cstdint>
-#include <functional>
-#include <string>
-#include <iostream>
 #include <boost/variant.hpp>
-#include <proxygen/lib/http/HTTPCommonHeaders.h>
+#include <cstdint>
 #include <folly/Range.h>
+#include <functional>
+#include <glog/logging.h>
+#include <iostream>
+#include <proxygen/lib/http/HTTPCommonHeaders.h>
+#include <string>
 
 namespace proxygen {
 
@@ -28,10 +28,17 @@ namespace proxygen {
  */
 class HPACKHeaderName {
  public:
-  HPACKHeaderName() {}
+  HPACKHeaderName() {
+  }
 
   explicit HPACKHeaderName(folly::StringPiece name) {
     storeAddress(name);
+  }
+  explicit HPACKHeaderName(HTTPHeaderCode headerCode) {
+    CHECK_NE(headerCode, HTTP_HEADER_NONE);
+    CHECK_NE(headerCode, HTTP_HEADER_OTHER);
+    address_ = HTTPCommonHeaders::getPointerToName(
+        headerCode, HTTPCommonHeaderTableType::TABLE_LOWERCASE);
   }
   HPACKHeaderName(const HPACKHeaderName& headerName) {
     copyAddress(headerName);
@@ -68,7 +75,7 @@ class HPACKHeaderName {
    */
   bool operator==(const HPACKHeaderName& headerName) const {
     return address_ == headerName.address_ ||
-      *address_ == *(headerName.address_);
+           *address_ == *(headerName.address_);
   }
   bool operator!=(const HPACKHeaderName& headerName) const {
     // Utilize the == overloaded operator
@@ -112,15 +119,16 @@ class HPACKHeaderName {
    * Returns the HTTPHeaderCode associated with the wrapped address_
    */
   HTTPHeaderCode getHeaderCode() const {
-    return HTTPCommonHeaders::getHeaderCodeFromTableCommonHeaderName(
-      address_, TABLE_LOWERCASE);
+    return HTTPCommonHeaders::getCodeFromTableName(
+        address_, HTTPCommonHeaderTableType::TABLE_LOWERCASE);
   }
 
   /*
    * Returns whether the name pointed to by this instance is a common header
    */
   bool isCommonHeader() const {
-    return HTTPCommonHeaders::isHeaderNameFromTable(address_, TABLE_LOWERCASE);
+    return HTTPCommonHeaders::isNameFromTable(
+        address_, HTTPCommonHeaderTableType::TABLE_LOWERCASE);
   }
 
   /*
@@ -138,16 +146,16 @@ class HPACKHeaderName {
    * Store a reference to either a common header or newly allocated string
    */
   void storeAddress(folly::StringPiece name) {
-    HTTPHeaderCode headerCode = HTTPCommonHeaders::hash(
-      name.data(), name.size());
+    HTTPHeaderCode headerCode =
+        HTTPCommonHeaders::hash(name.data(), name.size());
     if (headerCode == HTTPHeaderCode::HTTP_HEADER_NONE ||
         headerCode == HTTPHeaderCode::HTTP_HEADER_OTHER) {
       std::string* newAddress = new std::string(name.size(), 0);
       std::transform(name.begin(), name.end(), newAddress->begin(), ::tolower);
       address_ = newAddress;
     } else {
-      address_ = HTTPCommonHeaders::getPointerToHeaderName(
-        headerCode, TABLE_LOWERCASE);
+      address_ = HTTPCommonHeaders::getPointerToName(
+          headerCode, HTTPCommonHeaderTableType::TABLE_LOWERCASE);
     }
   }
 
@@ -188,8 +196,8 @@ class HPACKHeaderName {
     if (address_ == nullptr) {
       return false;
     } else {
-      return !HTTPCommonHeaders::isHeaderNameFromTable(
-        address_, TABLE_LOWERCASE);
+      return !HTTPCommonHeaders::isNameFromTable(
+          address_, HTTPCommonHeaderTableType::TABLE_LOWERCASE);
     }
   }
 
@@ -205,15 +213,15 @@ inline std::ostream& operator<<(std::ostream& os, const HPACKHeaderName& name) {
   return os;
 }
 
-} // proxygen
+} // namespace proxygen
 
 namespace std {
 
-template<>
+template <>
 struct hash<proxygen::HPACKHeaderName> {
   size_t operator()(const proxygen::HPACKHeaderName& headerName) const {
     return std::hash<std::string>()(headerName.get());
   }
 };
 
-} // std
+} // namespace std

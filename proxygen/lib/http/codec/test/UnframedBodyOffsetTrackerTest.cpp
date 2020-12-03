@@ -1,18 +1,15 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
-#include <folly/portability/GTest.h>
-#include <proxygen/lib/http/codec/UnframedBodyOffsetTracker.h>
 
-using namespace testing;
-using UnframedBodyOffsetTracker =
-    proxygen::hq::UnframedBodyOffsetTracker;
+#include <proxygen/lib/http/codec/UnframedBodyOffsetTracker.h>
+#include <folly/portability/GTest.h>
+
+using UnframedBodyOffsetTracker = proxygen::hq::UnframedBodyOffsetTracker;
 
 TEST(UnframedBodyOffsetTrackerTest, TestStartBodyTracking) {
   const uint64_t streamOffset = 42;
@@ -86,7 +83,6 @@ TEST(UnframedBodyOffsetTrackerTest, TestGetBodyStreamStartOffsetError) {
   auto offset = tracker.getBodyStreamStartOffset();
   EXPECT_TRUE(offset.hasError());
 }
-
 
 TEST(UnframedBodyOffsetTrackerTest, TestAppTostreamOffset) {
   const uint64_t streamOffset = 42;

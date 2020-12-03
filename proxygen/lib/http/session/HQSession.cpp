@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/session/HQSession.h>
 
 #include <proxygen/lib/http/codec/HQControlCodec.h>
@@ -19,7 +18,6 @@
 #include <proxygen/lib/http/session/HTTPSessionStats.h>
 #include <proxygen/lib/http/session/HTTPTransaction.h>
 
-#include <boost/cast.hpp>
 #include <folly/CppAttributes.h>
 #include <folly/Format.h>
 #include <folly/ScopeGuard.h>
@@ -29,13 +27,15 @@
 #include <folly/io/async/DelayedDestructionBase.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/HHWheelTimer.h>
+#include <quic/QuicConstants.h>
+#include <quic/common/BufUtil.h>
+#include <quic/logging/QLoggerConstants.h>
 #include <wangle/acceptor/ConnectionManager.h>
 
 namespace {
 static const uint16_t kMaxReadsPerLoop = 16;
 static const std::string kNoProtocolString("");
 static const std::string kH1QV1ProtocolString("h1q-fb");
-static const std::string kH1QLigerProtocolString("h1q");
 static const std::string kH1QV2ProtocolString("h1q-fb-v2");
 static const std::string kQUICProtocolName("QUIC");
 
@@ -43,20 +43,16 @@ static const std::string kQUICProtocolName("QUIC");
 // that we want to send.  If we receive an application error code, convert to
 // HTTP_CLOSED_CRITICAL_STREAM
 quic::QuicErrorCode quicControlStreamError(quic::QuicErrorCode error) {
-  return folly::variant_match(
-      error,
-      [&](quic::ApplicationErrorCode) {
-        return quic::QuicErrorCode(
-            proxygen::HTTP3::ErrorCode::HTTP_CLOSED_CRITICAL_STREAM);
-      },
-      [](quic::LocalErrorCode errorCode) {
-        return quic::QuicErrorCode(errorCode);
-      },
-      [](quic::TransportErrorCode errorCode) {
-        return quic::QuicErrorCode(errorCode);
-      });
+  switch (error.type()) {
+    case quic::QuicErrorCode::Type::ApplicationErrorCode_E:
+      return quic::QuicErrorCode(
+          proxygen::HTTP3::ErrorCode::HTTP_CLOSED_CRITICAL_STREAM);
+    case quic::QuicErrorCode::Type::LocalErrorCode_E:
+    case quic::QuicErrorCode::Type::TransportErrorCode_E:
+      return error;
+  }
+  folly::assume_unreachable();
 }
-
 } // namespace
 
 using namespace proxygen::hq;
@@ -64,14 +60,14 @@ using namespace proxygen::hq;
 namespace proxygen {
 
 const std::string kH3FBCurrentDraft("h3-fb-05");
-const std::string kH3CurrentDraft("h3-22");
-const std::string kHQCurrentDraft("hq-22");
+const std::string kH3LegacyDraft("h3-27");
+const std::string kH3CurrentDraft("h3-29");
+const std::string kHQCurrentDraft("hq-29");
 
 const http2::PriorityUpdate hqDefaultPriority{kSessionStreamId, false, 15};
 
 HQSession::~HQSession() {
   VLOG(3) << *this << " closing";
-  CHECK_EQ(numberOfStreams(), 0);
   runDestroyCallbacks();
 }
 
@@ -101,6 +97,9 @@ void HQSession::onNewBidirectionalStream(quic::StreamId id) noexcept {
   hqStream = createStreamTransport(id);
   DCHECK(hqStream);
   sock_->setReadCallback(id, this);
+  if (ingressLimitExceeded()) {
+    sock_->pauseRead(id);
+  }
   maxIncomingStreamId_ = std::max(maxIncomingStreamId_, id);
 }
 
@@ -138,14 +137,23 @@ void HQSession::onStopSending(quic::StreamId id,
   }
 }
 
+void HQSession::onKnob(uint64_t knobSpace,
+                       uint64_t knobId,
+                       quic::Buf knobBlob) {
+  LOG(INFO) << __func__ << " sess=" << *this << " knob frame received: "
+            << " KnobSpace: " << std::hex << knobSpace << " KnobId: " << knobId
+            << " KnobBlob: "
+            << std::string(reinterpret_cast<const char*>(knobBlob->data()),
+                           knobBlob->length());
+}
+
 bool HQSession::H1QFBV1VersionUtils::checkNewStream(quic::StreamId id) {
   // Reject all unidirectional streams and all server-initiated streams
   if (session_.sock_->isUnidirectionalStream(id) ||
       session_.sock_->isServerStream(id)) {
     session_.abortStream(HTTPException::Direction::INGRESS_AND_EGRESS,
                          id,
-                         HTTP3::ErrorCode::HTTP_WRONG_STREAM);
-    QUIC_TRACE_SOCK(stream_event, session_.sock_, "abort", id, 0);
+                         HTTP3::ErrorCode::HTTP_STREAM_CREATION_ERROR);
     return false;
   }
   return true;
@@ -158,8 +166,7 @@ bool HQSession::GoawayUtils::checkNewStream(HQSession& session,
       session.sock_->isServerStream(id)) {
     session.abortStream(HTTPException::Direction::INGRESS_AND_EGRESS,
                         id,
-                        HTTP3::ErrorCode::HTTP_WRONG_STREAM);
-    QUIC_TRACE_SOCK(stream_event, session.sock_, "abort", id, 0);
+                        HTTP3::ErrorCode::HTTP_STREAM_CREATION_ERROR);
     return false;
   }
   // Cancel any stream that is out of the range allowed by GOAWAY
@@ -177,7 +184,6 @@ bool HQSession::GoawayUtils::checkNewStream(HQSession& session,
       session.abortStream(HTTPException::Direction::INGRESS_AND_EGRESS,
                           id,
                           HTTP3::ErrorCode::HTTP_REQUEST_REJECTED);
-      QUIC_TRACE_SOCK(stream_event, session.sock_, "abort", id, 0);
       return false;
     }
   }
@@ -210,6 +216,8 @@ bool HQSession::onTransportReadyCommon() noexcept {
   if (drainState_ == DrainState::PENDING) {
     versionUtils_->sendGoaway();
   }
+
+  informSessionControllerTransportReady();
   return true;
 }
 
@@ -334,149 +342,16 @@ HQSession::HQVersionUtils::createControlCodec(hq::UnidirectionalStreamType type,
   }
 }
 
-bool HQSession::tryBindIngressStreamToTxn(hq::PushId pushId,
-                                          HQIngressPushStream* pushStream) {
-  // lookup pending nascent stream id
-
-  VLOG(4) << __func__
-          << " attempting to find pending stream id for pushID=" << pushId;
-  auto lookup = streamLookup_.by<push_id>();
-  VLOG(4) << __func__ << " lookup table contains " << lookup.size()
-          << " elements";
-  auto res = lookup.find(pushId);
-  if (res == lookup.end()) {
-    VLOG(4) << __func__ << " pushID=" << pushId
-            << " not found in the lookup table";
-    return false;
-  }
-  auto streamId = res->get<quic_stream_id>();
-
-  if (pushStream == nullptr) {
-    VLOG(4) << __func__ << " ingress stream hint not passed.";
-    pushStream = findIngressPushStreamByPushId(pushId);
-    if (!pushStream) {
-      VLOG(4) << __func__ << " ingress stream with pushID=" << pushId
-              << " not found.";
-      return false;
-    }
-  }
-
-  VLOG(4) << __func__ << " attempting to bind streamID=" << streamId
-          << " to pushID=" << pushId;
-  pushStream->bindTo(streamId);
-
-  // Check postconditions - the ingress push stream
-  // should own both the push id and the stream id.
-  // No nascent stream should own the stream id
-  auto streamById = findIngressPushStream(streamId);
-  auto streamByPushId = findIngressPushStreamByPushId(pushId);
-
-  DCHECK_EQ(streamId, pushStream->getIngressStreamId());
-  DCHECK(streamById) << "Ingress stream must be bound to the streamID="
-                     << streamId;
-  DCHECK(streamByPushId) << "Ingress stream must be found by the pushID="
-                         << pushId;
-  DCHECK_EQ(streamById, streamByPushId) << "Must be same stream";
-
-  VLOG(4) << __func__ << " successfully bound streamID=" << streamId
-          << " to pushID=" << pushId;
-  return true;
-}
-
-HQSession::HQIngressPushStream* HQSession::createIngressPushStream(
-    HTTPCodec::StreamID parentId, hq::PushId pushId) {
-
-  // Check that a stream with this ID has not been created yet
-  DCHECK(!findIngressPushStreamByPushId(pushId))
-      << "Ingress stream with this push ID already exists pushID=" << pushId;
-
-  auto matchPair = ingressPushStreams_.emplace(
-      std::piecewise_construct,
-      std::forward_as_tuple(pushId),
-      std::forward_as_tuple(
-          *this,
-          pushId,
-          parentId,
-          getNumTxnServed(),
-          WheelTimerInstance(transactionsTimeout_, getEventBase())));
-
-  CHECK(matchPair.second) << "Emplacement failed, despite earlier "
-                             "existence check.";
-
-  auto newIngressPushStream = &matchPair.first->second;
-
-  // If there is a nascent stream ready to be bound to the newly
-  // created ingress stream, do it now.
-  auto bound = tryBindIngressStreamToTxn(pushId, newIngressPushStream);
-
-  VLOG(4) << "Successfully created new ingress push stream"
-          << " pushID=" << pushId << " parentStreamID=" << parentId
-          << " bound=" << bound << " streamID="
-          << (bound ? newIngressPushStream->getIngressStreamId()
-                    : static_cast<unsigned long>(-1));
-
-  return newIngressPushStream;
-}
-
-HQSession::HQEgressPushStream* FOLLY_NULLABLE HQSession::createEgressPushStream(
-    hq::PushId pushId, quic::StreamId streamId, quic::StreamId parentStreamId) {
-
-  VLOG(4) << __func__ << "sess=" << *this << " pushId=" << pushId
-          << " drainState_=" << drainState_ << " streamId=" << streamId
-          << " parentStreamId=" << parentStreamId;
-
-  // Version utils SHOULD be created before a stream transport is created
-  DCHECK(versionUtils_);
-
-  // Use version utils to ensure that the session is not in draining state
-  if (!versionUtils_->checkNewStream(streamId)) {
-    VLOG(3) << __func__ << " Not creating - session is draining"
-            << " sess=" << *this << " pushId=" << pushId
-            << " drainState_=" << drainState_ << " streamId=" << streamId
-            << " parentStreamId=" << parentStreamId;
-    return nullptr;
-  }
-
-  auto codec = versionUtils_->createCodec(streamId);
-
-  auto matchPair = egressPushStreams_.emplace(
-      std::piecewise_construct,
-      std::forward_as_tuple(streamId),
-      std::forward_as_tuple(
-          *this,
-          streamId,
-          pushId,
-          parentStreamId,
-          getNumTxnServed(),
-          std::move(codec),
-          WheelTimerInstance(transactionsTimeout_, getEventBase())));
-  incrementSeqNo();
-
-  CHECK(matchPair.second) << "Emplacement failed, despite earlier "
-                             "existence check.";
-
-  // Generate the stream preface
-  matchPair.first->second.generateStreamPreface();
-
-  // Generate the push id
-  matchPair.first->second.generateStreamPushId();
-
-  // Notify pending egress on the stream
-  matchPair.first->second.notifyPendingEgress();
-
-  return &matchPair.first->second;
-}
-
 bool HQSession::getAndCheckApplicationProtocol() {
   CHECK(sock_);
   auto alpn = sock_->getAppProtocol();
   if (alpn) {
-    if (alpn == kH1QV1ProtocolString || alpn == kH1QLigerProtocolString ||
-        alpn == kHQCurrentDraft) {
+    if (alpn == kH1QV1ProtocolString || alpn == kHQCurrentDraft) {
       version_ = HQVersion::H1Q_FB_V1;
     } else if (alpn == kH1QV2ProtocolString) {
       version_ = HQVersion::H1Q_FB_V2;
-    } else if (alpn == kH3FBCurrentDraft || alpn == kH3CurrentDraft) {
+    } else if (alpn == kH3FBCurrentDraft || alpn == kH3CurrentDraft ||
+               alpn == kH3LegacyDraft) {
       version_ = HQVersion::HQ;
     }
   }
@@ -563,6 +438,12 @@ bool HQSession::getCurrentTransportInfo(wangle::TransportInfo* tinfo) {
     quicInfo_->totalPTOCount = quicInfo.totalPTOCount;
     quicInfo_->totalTransportBytesSent = quicInfo.bytesSent;
     quicInfo_->totalTransportBytesRecvd = quicInfo.bytesRecvd;
+    quicInfo_->transportSettings = sock_->getTransportSettings();
+    tinfo->protocolInfo = quicInfo_;
+    auto flowControl = sock_->getConnectionFlowControl();
+    if (!flowControl.hasError() && flowControl->sendWindowAvailable) {
+      tinfo->recvwnd = flowControl->receiveWindowAvailable;
+    }
   }
   return true;
 }
@@ -577,10 +458,12 @@ bool HQSession::getCurrentTransportInfoWithoutUpdate(
     auto quicInfo = sock_->getTransportInfo();
     tinfo->rtt = quicInfo.srtt;
     tinfo->rtt_var = static_cast<int64_t>(quicInfo.rttvar.count());
+    tinfo->caAlgo = std::string(
+        congestionControlTypeToString(quicInfo.congestionControlType));
     // Cwnd is logged in terms of MSS.
-    // TODO: this is incorrect if Quic negotiates a different mss.
-    tinfo->cwnd = static_cast<int64_t>(quicInfo.congestionWindow /
-                                       quic::kDefaultUDPSendPacketLen);
+    tinfo->cwnd =
+        static_cast<int64_t>(quicInfo.congestionWindow / quicInfo.mss);
+    tinfo->mss = quicInfo.mss;
     tinfo->cwndBytes = static_cast<int64_t>(quicInfo.congestionWindow);
     tinfo->rtx = static_cast<int64_t>(quicInfo.packetsRetransmitted);
     tinfo->rtx_tm = static_cast<int64_t>(quicInfo.timeoutBasedLoss);
@@ -601,63 +484,6 @@ bool HQSession::getCurrentStreamTransportInfo(QuicStreamProtocolInfo* qspinfo,
     }
   }
   return false;
-}
-
-// Return a new push id that can be used for outgoing transactions
-hq::PushId HQSession::createNewPushId(quic::StreamId txnID) {
-  auto newPushId = nextAvailablePushId_++ | hq::kPushIdMask;
-  streamLookup_.push_back(PushToStreamMap::value_type(newPushId, txnID));
-  return newPushId;
-}
-
-// this is the creation of outgoing pushed transaction
-// Only supported in Downstream session
-HTTPTransaction* FOLLY_NULLABLE
-HQSession::newPushedTransaction(HTTPCodec::StreamID parentRequestStreamId,
-                                HTTPTransaction::PushHandler* handler) {
-
-  if (drainState_ != DrainState::NONE) {
-    VLOG(3) << __func__ << " Not creating transaction - draining "
-            << drainState_;
-    return nullptr;
-  }
-
-  auto parentRequestStream = findNonDetachedStream(parentRequestStreamId);
-  if (!parentRequestStream) {
-    VLOG(3) << __func__ << " Not crating trnasaction - request stream StreamID="
-            << parentRequestStreamId << " not found";
-    return nullptr;
-  }
-
-  // Allocate a new egress unidirectional stream from the socket
-  // this method will throw exception on failure
-  auto pushStreamId = sock_->createUnidirectionalStream();
-
-  // Record the newly created push transaction in the session
-  // NOTE: should be stored in the transaction
-  // NOTE: should be cleaned up when the transaction is closed
-  if (!pushStreamId) {
-    VLOG(3) << __func__ << " failed to create new unidirectional stream";
-    return nullptr;
-  }
-
-  auto pushId = createNewPushId(pushStreamId.value());
-
-  // Create the actual outgoing Egress Push stream.
-  auto pushStream = createEgressPushStream(
-      pushId, pushStreamId.value(), parentRequestStreamId);
-
-  if (!pushStream) {
-    LOG(ERROR) << "Creation of the push stream failed, pushID=" << pushId;
-    return nullptr;
-  }
-
-  VLOG(5) << "New pushed transaction: pushId=" << pushId
-          << "; pushStreamId=" << pushStreamId.value()
-          << "; assocStreamId=" << parentRequestStreamId;
-
-  pushStream->txn_.setHandler(handler);
-  return &pushStream->txn_;
 }
 
 void HQSession::HQStreamTransportBase::generateGoaway() {
@@ -772,8 +598,7 @@ void HQSession::GoawayUtils::sendGoaway(HQSession& session) {
 
 quic::StreamId HQSession::getGoawayStreamId() {
   if (drainState_ == DrainState::NONE || drainState_ == DrainState::PENDING) {
-    // The maximum representable stream id in a quic varint
-    return quic::kEightByteLimit;
+    return hq::kMaxClientBidiStreamId;
   }
   return maxIncomingStreamId_;
 }
@@ -796,9 +621,6 @@ size_t HQSession::HQVersionUtils::sendSettings() {
           qpackCodec_.setMaxBlocking(setting.value);
           break;
         case hq::SettingId::MAX_HEADER_LIST_SIZE:
-          break;
-        case hq::SettingId::NUM_PLACEHOLDERS:
-          // TODO: priorities not implemented yet
           break;
       }
     }
@@ -829,16 +651,16 @@ void HQSession::closeWhenIdle() {
   checkForShutdown();
 }
 
-void HQSession::dropConnection() {
-  dropConnectionSync(
-      std::make_pair(HTTP3::ErrorCode::HTTP_NO_ERROR, "Stopping"),
-      kErrorDropped);
+void HQSession::dropConnection(const std::string& errorMsg) {
+  auto msg = errorMsg.empty() ? "Stopping" : errorMsg;
+  dropConnectionSync(std::make_pair(HTTP3::ErrorCode::HTTP_NO_ERROR, msg),
+                     kErrorDropped);
 }
 
 void HQSession::dropConnectionAsync(
     std::pair<quic::QuicErrorCode, std::string> errorCode,
     ProxygenError proxygenError) {
-  if (!dropInNextLoop_.hasValue()) {
+  if (!dropInNextLoop_.has_value()) {
     dropInNextLoop_ = std::make_pair(errorCode, proxygenError);
     scheduleLoopCallback(true);
   } else {
@@ -861,7 +683,7 @@ void HQSession::dropConnectionSync(
     return;
   }
   dropping_ = true;
-  if (numberOfStreams() > 0) {
+  if (getNumStreams() > 0) {
     // should deliver errors to all open streams, they will all detach-
     sock_->close(std::move(errorCode));
     sock_.reset();
@@ -895,7 +717,7 @@ void HQSession::dropConnectionSync(
           VLOG(5) << __func__ << " pendingStreamStillOpen: " << pendingStreamId;
         });
   }
-  CHECK_EQ(numberOfStreams(), 0);
+  CHECK_EQ(getNumStreams(), 0);
 }
 
 void HQSession::checkForShutdown() {
@@ -924,7 +746,7 @@ void HQSession::checkForShutdown() {
   // minimize issues with iterator invalidation.
   invokeOnAllStreams(
       [](HQStreamTransportBase* stream) { stream->checkForDetach(); });
-  if (drainState_ == DrainState::DONE && (numberOfStreams() == 0) &&
+  if (drainState_ == DrainState::DONE && (getNumStreams() == 0) &&
       !isLoopCallbackScheduled()) {
     if (sock_) {
       sock_->close(folly::none);
@@ -1012,11 +834,8 @@ HQSession::findStreamImpl(quic::StreamId streamId,
   if (it != streams_.end()) {
     pstream = &it->second;
   }
-  if (!pstream && includeIngress) {
-    pstream = findIngressPushStream(streamId);
-  }
-  if (!pstream && includeEgress) {
-    pstream = findEgressPushStream(streamId);
+  if (!pstream && (includeIngress || includeEgress)) {
+    pstream = findPushStream(streamId);
   }
   if (!pstream) {
     return nullptr;
@@ -1029,51 +848,6 @@ HQSession::findStreamImpl(quic::StreamId streamId,
     }
   }
   return pstream;
-}
-
-HQSession::HQIngressPushStream* FOLLY_NULLABLE
-HQSession::findIngressPushStream(quic::StreamId streamId) {
-  auto lookup = streamLookup_.by<quic_stream_id>();
-  auto res = lookup.find(streamId);
-  if (res == lookup.end()) {
-    return nullptr;
-  } else {
-    return findIngressPushStreamByPushId(res->get<push_id>());
-  }
-}
-
-HQSession::HQIngressPushStream* FOLLY_NULLABLE
-HQSession::findIngressPushStreamByPushId(hq::PushId pushId) {
-  VLOG(4) << __func__ << " looking up ingress push stream by pushID=" << pushId;
-  auto it = ingressPushStreams_.find(pushId);
-  if (it == ingressPushStreams_.end()) {
-    return nullptr;
-  } else {
-    return &it->second;
-  }
-}
-
-HQSession::HQEgressPushStream* FOLLY_NULLABLE
-HQSession::findEgressPushStream(quic::StreamId streamId) {
-  auto it = egressPushStreams_.find(streamId);
-  if (it == egressPushStreams_.end()) {
-    return nullptr;
-  } else {
-    auto pstream = &it->second;
-    DCHECK(pstream->isUsing(streamId));
-    return pstream;
-  }
-}
-
-HQSession::HQEgressPushStream* FOLLY_NULLABLE
-HQSession::findEgressPushStreamByPushId(hq::PushId pushId) {
-  auto lookup = streamLookup_.by<push_id>();
-  auto res = lookup.find(pushId);
-  if (res == lookup.end()) {
-    return nullptr;
-  } else {
-    return findEgressPushStream(res->get<quic_stream_id>());
-  }
 }
 
 HQSession::HQControlStream* FOLLY_NULLABLE
@@ -1103,96 +877,24 @@ HQSession::findControlStream(quic::StreamId streamId) {
 bool HQSession::eraseStream(quic::StreamId streamId) {
   // Try different possible locations and remove the
   // stream
-  uint8_t erasedBitmask = 0;
-  constexpr uint8_t STREAMS = 1;
-  constexpr uint8_t INGRESS_PUSH_STREAMS = 1 << 1;
-  constexpr uint8_t EGRESS_PUSH_STREAMS = 1 << 2;
-
+  bool erased = false;
   if (streams_.erase(streamId)) {
-    erasedBitmask |= STREAMS;
+    erased = true;
   }
 
-  if (egressPushStreams_.erase(streamId)) {
-    erasedBitmask |= EGRESS_PUSH_STREAMS;
-  }
-
-  auto lookup = streamLookup_.by<quic_stream_id>();
-  auto rlookup = streamLookup_.by<push_id>();
-
-  auto res = lookup.find(streamId);
-  if (res != lookup.end()) {
-    auto pushId = res->get<push_id>();
-    // Ingress push stream may be using the push id
-    // erase it as well if present
-    if (ingressPushStreams_.erase(pushId)) {
-      erasedBitmask |= INGRESS_PUSH_STREAMS;
-    }
-    // Unconditionally erase the lookup entry table
-    lookup.erase(res);
-    CHECK(rlookup.find(pushId) == rlookup.end());
-  }
-
-  // If more than one bit is set in the erasedBitmask,
-  // something is really fishy
-  CHECK(!(erasedBitmask & (erasedBitmask - 1)))
-      << " Double erase for " << streamId
-      << " ;streams_: " << bool(erasedBitmask & STREAMS)
-      << " ;ingressPushStreams_: " << bool(erasedBitmask & INGRESS_PUSH_STREAMS)
-      << " ;egressPushtreams_: " << bool(erasedBitmask & EGRESS_PUSH_STREAMS);
-
-  return erasedBitmask != 0;
-}
-
-bool HQSession::eraseStreamByPushId(hq::PushId pushId) {
-
-  bool erased = ingressPushStreams_.erase(pushId);
-
-  auto lookup = streamLookup_.by<push_id>();
-  // Reverse lookup for the postconditions CHECK
-  auto rlookup = streamLookup_.by<quic_stream_id>();
-
-  auto res = lookup.find(pushId);
-  if (res != lookup.end()) {
-    auto streamId = res->get<quic_stream_id>();
-    erased |= (lookup.erase(res) != lookup.end());
-    // The corresponding stream id should not be present in
-    // the reverse map
-    CHECK(rlookup.find(streamId) == rlookup.end());
-  }
+  // TODO: only do this when stream is server-uni
+  erased |= erasePushStream(streamId);
 
   return erased;
 }
 
-uint32_t HQSession::numberOfStreams() const {
-  return countStreamsImpl(true /* includeEgress */, true /* includeIngress */);
-}
-
-uint32_t HQSession::numberOfIngressStreams() const {
-  return countStreamsImpl(false /* includeEgress */, true /* inculdeIngress */);
-}
-
-uint32_t HQSession::numberOfEgressStreams() const {
-  return countStreamsImpl(true /* includeEgress */, false /* includeIngress */);
-}
-
-uint32_t HQSession::numberOfIngressPushStreams() const {
-  return ingressPushStreams_.size();
-}
-
-uint32_t HQSession::numberOfEgressPushStreams() const {
-  return egressPushStreams_.size();
-}
-
-uint32_t HQSession::countStreamsImpl(bool includeEgress,
-                                     bool includeIngress) const {
-  size_t result = streams_.size();
-  if (includeIngress) {
-    result += ingressPushStreams_.size();
-  }
-  if (includeEgress) {
-    result += egressPushStreams_.size();
-  }
-  return result;
+void HQSession::injectTraceEventIntoAllTransactions(TraceEvent& event) {
+  invokeOnAllStreams([event](HQStreamTransportBase* stream) {
+    HTTPTransactionHandler* handler = stream->txn_.getHandler();
+    if (handler != nullptr) {
+      handler->traceEventAvailable(event);
+    }
+  });
 }
 
 void HQSession::runLoopCallback() noexcept {
@@ -1203,14 +905,23 @@ void HQSession::runLoopCallback() noexcept {
 
   inLoopCallback_ = true;
   HQSession::DestructorGuard dg(this);
-  auto scopeg = folly::makeGuard([this] {
+  auto scopeg = folly::makeGuard([this, toSend = maxToSend_] {
     // This ScopeGuard needs to be under the above DestructorGuard
     updatePendingWrites();
+    if (toSend > 0) {
+      if (txnEgressQueue_.empty()) {
+        // We wrote out everything
+        resumeTransactions();
+      } else {
+        // We couldn't write everything, the socket is backpressuring
+        pauseTransactions();
+      }
+    }
     checkForShutdown();
     inLoopCallback_ = false;
   });
 
-  if (dropInNextLoop_.hasValue()) {
+  if (dropInNextLoop_.has_value()) {
     dropConnectionSync(dropInNextLoop_->first, dropInNextLoop_->second);
     return;
   }
@@ -1229,7 +940,7 @@ void HQSession::runLoopCallback() noexcept {
   // Then write the request streams
   if (!txnEgressQueue_.empty() && maxToSend_ > 0) {
     // TODO: we could send FIN only?
-    writeRequestStreams(maxToSend_);
+    maxToSend_ = writeRequestStreams(maxToSend_);
   }
   // Zero out maxToSend_ here.  We won't egress anything else until the next
   // onWriteReady call
@@ -1263,44 +974,32 @@ void HQSession::HQVersionUtils::readDataProcessed() {
 
 folly::Expected<uint64_t, hq::UnframedBodyOffsetTrackerError>
 HQSession::HQVersionUtils::onIngressPeekDataAvailable(uint64_t streamOffset) {
-  CHECK(hqStreamCodecPtr_) << ": HQStreamCodecPtr is not set";
+  CHECK(hqStreamCodecPtr_);
   return hqStreamCodecPtr_->onIngressDataAvailable(streamOffset);
 }
 
 folly::Expected<uint64_t, hq::UnframedBodyOffsetTrackerError>
 HQSession::HQVersionUtils::onIngressDataExpired(uint64_t streamOffset) {
-  CHECK(hqStreamCodecPtr_) << ": HQStreamCodecPtr is not set";
+  CHECK(hqStreamCodecPtr_);
   return hqStreamCodecPtr_->onIngressDataExpired(streamOffset);
 }
 
 folly::Expected<uint64_t, hq::UnframedBodyOffsetTrackerError>
 HQSession::HQVersionUtils::onIngressDataRejected(uint64_t streamOffset) {
-  CHECK(hqStreamCodecPtr_) << ": HQStreamCodecPtr is not set";
+  CHECK(hqStreamCodecPtr_);
   return hqStreamCodecPtr_->onIngressDataRejected(streamOffset);
 }
 
 folly::Expected<uint64_t, hq::UnframedBodyOffsetTrackerError>
 HQSession::HQVersionUtils::onEgressBodySkip(uint64_t bodyOffset) {
-  CHECK(hqStreamCodecPtr_) << ": HQStreamCodecPtr is not set";
+  CHECK(hqStreamCodecPtr_);
   return hqStreamCodecPtr_->onEgressBodySkip(bodyOffset);
 }
 
 folly::Expected<uint64_t, hq::UnframedBodyOffsetTrackerError>
 HQSession::HQVersionUtils::onEgressBodyReject(uint64_t bodyOffset) {
-  CHECK(hqStreamCodecPtr_) << ": HQStreamCodecPtr is not set";
+  CHECK(hqStreamCodecPtr_);
   return hqStreamCodecPtr_->onEgressBodyReject(bodyOffset);
-}
-
-hq::TrackerOffsetResult HQSession::HQVersionUtils::getEgressBodyOffset(
-    uint64_t streamOffset) const {
-  CHECK(hqStreamCodecPtr_) << ": HQStreamCodecPtr is not set";
-  return hqStreamCodecPtr_->getEgressBodyOffset(streamOffset);
-}
-
-hq::TrackerOffsetResult HQSession::HQVersionUtils::appToStreamOffset(
-    uint64_t bodyOffset) const {
-  CHECK(hqStreamCodecPtr_) << ": HQStreamCodecPtr is not set";
-  return hqStreamCodecPtr_->appToStreamOffset(bodyOffset);
 }
 
 void HQSession::scheduleWrite() {
@@ -1324,16 +1023,33 @@ void HQSession::scheduleLoopCallback(bool thisIteration) {
 }
 
 void HQSession::resumeReads(quic::StreamId streamId) {
-  VLOG(4) << __func__ << " sess=" << *this << ": resuming reads";
+  VLOG(4) << __func__ << " sess=" << *this
+          << ": resuming reads id=" << streamId;
   sock_->resumeRead(streamId);
   scheduleLoopCallback(true);
   // TODO: ideally we should cancel the managed timeout when all the streams are
   // paused and then restart it when the timeouts are unpaused
 }
 
+void HQSession::resumeReads() {
+  VLOG(4) << __func__ << " sess=" << *this << ": resuming reads";
+  invokeOnIngressStreams([this](HQStreamTransportBase* hqStream) {
+    if (sock_) {
+      sock_->resumeRead(hqStream->getIngressStreamId());
+    }
+  });
+}
+
 void HQSession::pauseReads(quic::StreamId streamId) {
-  VLOG(4) << __func__ << " sess=" << *this << ": pausing reads";
+  VLOG(4) << __func__ << " sess=" << *this << ": pausing reads id=" << streamId;
   sock_->pauseRead(streamId);
+}
+
+void HQSession::pauseReads() {
+  VLOG(4) << __func__ << " sess=" << *this << ": pausing reads";
+  invokeOnIngressStreams([this](HQStreamTransportBase* hqStream) {
+    sock_->pauseRead(hqStream->getIngressStreamId());
+  });
 }
 
 void HQSession::readAvailable(quic::StreamId id) noexcept {
@@ -1362,44 +1078,47 @@ void HQSession::readError(
   HTTPException ex(HTTPException::Direction::INGRESS_AND_EGRESS,
                    folly::to<std::string>("Got error=", quic::toString(error)));
 
-  // clang-format off
-  folly::variant_match(
-      error.first,
-      [this, id, &ex](quic::ApplicationErrorCode ec) {
-        auto errorCode = static_cast<HTTP3::ErrorCode>(ec);
-        VLOG(3) << "readError: QUIC Application Error: " << toString(errorCode)
-                << " streamID=" << id << " sess=" << *this;
-        auto stream = findNonDetachedStream(id);
-        if (stream) {
-          stream->onResetStream(errorCode, std::move(ex));
-        } else {
-          // When a stream is erased, it's callback is cancelled, so it really
-          // should be here
-          VLOG(3) << "readError: received application error="
-                  << toString(errorCode)
-                  << " for detached streamID=" << id
-                  << " sess=" << *this;
-        }
-      },
-      [this, id, &ex](quic::LocalErrorCode errorCode) {
-        VLOG(3) << "readError: QUIC Local Error: " << errorCode
-                << " streamID=" << id << " sess=" << *this;
-        if (errorCode == quic::LocalErrorCode::CONNECT_FAILED) {
-          ex.setProxygenError(kErrorConnect);
-        } else {
-          ex.setProxygenError(kErrorShutdown);
-        }
-        errorOnTransactionId(id, std::move(ex));
-      },
-      [this, id, &ex](quic::TransportErrorCode errorCode) {
-        VLOG(3) << "readError: QUIC Transport Error: " << errorCode
-                << " streamID=" << id << " sess=" << *this;
-        ex.setProxygenError(kErrorConnectionReset);
-        // TODO: set Quic error when quic is OSS
-        ex.setErrno(uint32_t(errorCode));
-        errorOnTransactionId(id, std::move(ex));
-      });
-  // clang-format on
+  switch (error.first.type()) {
+    case quic::QuicErrorCode::Type::ApplicationErrorCode_E: {
+      auto errorCode =
+          static_cast<HTTP3::ErrorCode>(*error.first.asApplicationErrorCode());
+      VLOG(3) << "readError: QUIC Application Error: " << toString(errorCode)
+              << " streamID=" << id << " sess=" << *this;
+      auto stream = findNonDetachedStream(id);
+      if (stream) {
+        stream->onResetStream(errorCode, std::move(ex));
+      } else {
+        // When a stream is erased, it's callback is cancelled, so it really
+        // should be here
+        VLOG(3)
+            << "readError: received application error=" << toString(errorCode)
+            << " for detached streamID=" << id << " sess=" << *this;
+      }
+      break;
+    }
+    case quic::QuicErrorCode::Type::LocalErrorCode_E: {
+      quic::LocalErrorCode& errorCode = *error.first.asLocalErrorCode();
+      VLOG(3) << "readError: QUIC Local Error: " << errorCode
+              << " streamID=" << id << " sess=" << *this;
+      if (errorCode == quic::LocalErrorCode::CONNECT_FAILED) {
+        ex.setProxygenError(kErrorConnect);
+      } else {
+        ex.setProxygenError(kErrorShutdown);
+      }
+      errorOnTransactionId(id, std::move(ex));
+      break;
+    }
+    case quic::QuicErrorCode::Type::TransportErrorCode_E: {
+      quic::TransportErrorCode& errorCode = *error.first.asTransportErrorCode();
+      VLOG(3) << "readError: QUIC Transport Error: " << errorCode
+              << " streamID=" << id << " sess=" << *this;
+      ex.setProxygenError(kErrorConnectionReset);
+      // TODO: set Quic error when quic is OSS
+      ex.setErrno(uint32_t(errorCode));
+      errorOnTransactionId(id, std::move(ex));
+      break;
+    }
+  }
 }
 
 bool HQSession::isPartialReliabilityEnabled(quic::StreamId id) {
@@ -1421,50 +1140,46 @@ bool HQSession::isPartialReliabilityEnabled(quic::StreamId id) {
   return true;
 }
 
+HQSession::HQStreamTransportBase* FOLLY_NULLABLE
+HQSession::getPRStream(quic::StreamId id, const char* event) {
+  DCHECK(isPartialReliabilityEnabled(id))
+      << "PR not enabled prior to " << event;
+  auto hqStream = findStream(id);
+  if (hqStream) {
+    if (hqStream->detached_) {
+      LOG(ERROR) << event << " event received for detached stream " << id;
+      return nullptr;
+    }
+  }
+  return hqStream;
+}
+
 void HQSession::onPartialDataAvailable(
     quic::StreamId id,
     const HQUnidirStreamDispatcher::Callback::PeekData& partialData) {
-  DCHECK(isPartialReliabilityEnabled(id))
-      << "Must check whether the PR is enabled prior to calling " << __func__;
-  auto hqStream = findNonDetachedStream(id);
-  if (!hqStream) {
-    if (streams_.find(id) != streams_.end()) {
-      LOG(ERROR) << __func__ << " event received for detached stream " << id;
-    }
-    return;
+  auto hqStream = getPRStream(id, "data");
+  if (hqStream) {
+    hqStream->processPeekData(partialData);
   }
-  hqStream->processPeekData(partialData);
 }
 
 void HQSession::processExpiredData(quic::StreamId id, uint64_t offset) {
-  DCHECK(isPartialReliabilityEnabled(id))
-      << "Must check whether the PR is enabled prior to calling " << __func__;
-  auto hqStream = findNonDetachedStream(id);
-  if (!hqStream) {
-    if (streams_.find(id) != streams_.end()) {
-      LOG(ERROR) << __func__ << " event received for detached stream " << id;
-    }
-    return;
+  auto hqStream = getPRStream(id, "expired");
+  if (hqStream) {
+    hqStream->processDataExpired(offset);
   }
-  hqStream->processDataExpired(offset);
 }
 
 void HQSession::processRejectedData(quic::StreamId id, uint64_t offset) {
-  DCHECK(isPartialReliabilityEnabled(id))
-      << "Must check whether the PR is enabled prior to calling " << __func__;
-  auto hqStream = findNonDetachedStream(id);
-  if (!hqStream) {
-    if (streams_.find(id) != streams_.end()) {
-      LOG(ERROR) << __func__ << " event received for detached stream " << id;
-    }
-    return;
+  auto hqStream = getPRStream(id, "rejected");
+  if (hqStream) {
+    hqStream->processDataRejected(offset);
   }
-  hqStream->processDataRejected(offset);
 }
 
 void HQSession::timeoutExpired() noexcept {
   VLOG(3) << "ManagedConnection timeoutExpired " << *this;
-  if (numberOfStreams() > 0) {
+  if (getNumStreams() > 0) {
     VLOG(3) << "ignoring session timeout " << *this;
     resetTimeout();
     return;
@@ -1541,7 +1256,10 @@ void HQSession::readControlStream(HQControlStream* ctrlStream) {
   ctrlStream->readEOF_ = readRes.value().second;
 
   if (infoCallback_) {
-    infoCallback_->onRead(*this, readSize);
+    infoCallback_->onRead(
+        *this,
+        readSize,
+        static_cast<HTTPCodec::StreamID>(ctrlStream->getIngressStreamId()));
   }
   // GOAWAY may trigger session destroy, need a guard for that
   DestructorGuard dg(this);
@@ -1562,7 +1280,8 @@ void HQSession::assignReadCallback(quic::StreamId id,
 
   // Notify the read callback
   if (infoCallback_) {
-    infoCallback_->onRead(*this, toConsume);
+    infoCallback_->onRead(
+        *this, toConsume, static_cast<HTTPCodec::StreamID>(id));
   }
 
   auto ctrlStream =
@@ -1603,9 +1322,12 @@ void HQSession::assignPeekCallback(quic::StreamId id,
 
 void HQSession::rejectStream(quic::StreamId id) {
   // Do not read data for unknown unidirectional stream types.
-  // Send STOP_SENDING and rely on the peer sending a RESET to clear the
-  // stream in the transport.
-  sock_->stopSending(id, HTTP3::ErrorCode::HTTP_UNKNOWN_STREAM_TYPE);
+  // setReadCallback will send STOP_SENDING and rely on the peer sending a RESET
+  // to clear the stream in the transport. It is safe to stop reading from this
+  // stream. The peer is supposed to reset it on receipt of a STOP_SENDING
+  sock_->setReadCallback(
+      id, nullptr, HTTP3::ErrorCode::HTTP_UNKNOWN_STREAM_TYPE);
+  sock_->setPeekCallback(id, nullptr);
 }
 
 folly::Optional<hq::UnidirectionalStreamType> HQSession::parseStreamPreface(
@@ -1622,16 +1344,7 @@ size_t HQSession::cleanupPendingStreams() {
         streamsToCleanup.push_back(pendingStreamId);
       });
 
-  // Find stream ids which have been added to the stream
-  // lookup but lack matching HQIngressPushStream
-  auto lookup = streamLookup_.by<push_id>();
-  for (auto res : lookup) {
-    auto streamId = res.get<quic_stream_id>();
-    auto pushId = res.get<quic_stream_id>();
-    if (!ingressPushStreams_.count(pushId)) {
-      streamsToCleanup.push_back(streamId);
-    }
-  }
+  cleanupUnboundPushStreams(streamsToCleanup);
 
   // Clean up the streams by detaching all callbacks
   for (auto pendingStreamId : streamsToCleanup) {
@@ -1643,7 +1356,7 @@ size_t HQSession::cleanupPendingStreams() {
 
 void HQSession::clearStreamCallbacks(quic::StreamId id) {
   if (sock_) {
-    sock_->setReadCallback(id, nullptr);
+    sock_->setReadCallback(id, nullptr, folly::none);
     sock_->setPeekCallback(id, nullptr);
 
     if (isPartialReliabilityEnabled()) {
@@ -1652,51 +1365,6 @@ void HQSession::clearStreamCallbacks(quic::StreamId id) {
     }
   } else {
     VLOG(4) << "Attempt to clear callbacks on closed socket";
-  }
-}
-
-void HQSession::onNewPushStream(quic::StreamId pushStreamId,
-                                hq::PushId pushId,
-                                size_t toConsume) {
-  VLOG(4) << __func__ << " streamID=" << pushStreamId << " pushId=" << pushId;
-
-  bool eom = false;
-  if (serverPushLifecycleCb_) {
-    serverPushLifecycleCb_->onNascentPushStreamBegin(pushStreamId, eom);
-  }
-
-  auto consumeRes = sock_->consume(pushStreamId, toConsume);
-  CHECK(!consumeRes.hasError())
-      << "Unexpected error " << consumeRes.error() << " while consuming "
-      << toConsume << " bytes from stream=" << pushStreamId
-      << " pushId=" << pushId;
-
-  // Replace the peek callback with a read callback and pause the read callback
-  sock_->setReadCallback(pushStreamId, this);
-  sock_->setPeekCallback(pushStreamId, nullptr);
-  sock_->pauseRead(pushStreamId);
-
-  // Increment the sequence no to account for the new transport-like stream
-  incrementSeqNo();
-
-  streamLookup_.push_back(PushToStreamMap::value_type(pushId, pushStreamId));
-
-  VLOG(4) << __func__ << " assigned lookup from pushID=" << pushId
-          << " to streamID=" << pushStreamId;
-
-  // We have successfully read the push id. Notify the testing callbacks
-  if (serverPushLifecycleCb_) {
-    serverPushLifecycleCb_->onNascentPushStream(pushStreamId, pushId, eom);
-  }
-
-  // If the transaction for the incoming push stream has been created
-  // already, bind the new stream to the transaction
-  auto ingressPushStream = findIngressPushStreamByPushId(pushId);
-
-  if (ingressPushStream) {
-    auto bound = tryBindIngressStreamToTxn(pushId, ingressPushStream);
-    VLOG(4) << __func__ << " bound=" << bound << " pushID=" << pushId
-            << " pushStreamID=" << pushStreamId << " to txn ";
   }
 }
 
@@ -1720,12 +1388,8 @@ void HQSession::controlStreamReadError(
   auto ctrlStream = findControlStream(id);
 
   if (!ctrlStream) {
-    bool shouldLog =
-        folly::variant_match(error.first,
-                             [&](quic::LocalErrorCode err) {
-                               return err != quic::LocalErrorCode::NO_ERROR;
-                             },
-                             [](auto&) { return true; });
+    const quic::LocalErrorCode* err = error.first.asLocalErrorCode();
+    bool shouldLog = !err || (*err != quic::LocalErrorCode::NO_ERROR);
     LOG_IF(ERROR, shouldLog)
         << __func__ << " received read error=" << error
         << " for unknown control streamID=" << id << " sess=" << *this;
@@ -1763,17 +1427,19 @@ void HQSession::readRequestStream(quic::StreamId id) noexcept {
   if (hqStream->readEOF_) {
     auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - hqStream->createdTime);
-    QUIC_TRACE_SOCK(stream_event,
-                    sock_,
-                    "on_eom",
-                    hqStream->getStreamId(),
-                    folly::to<uint64_t>(timeDiff.count()));
+    if (sock_ && sock_->getState() && sock_->getState()->qLogger) {
+      sock_->getState()->qLogger->addStreamStateUpdate(
+          id, quic::kOnEOM, timeDiff);
+    }
+  } else if (readSize == 0) {
+    VLOG(3) << "Got a blank read, ignoring sess=" << *this;
+    return;
   }
   // Just buffer the data and postpone processing in the loop callback
   hqStream->readBuf_.append(std::move(data));
 
   if (infoCallback_) {
-    infoCallback_->onRead(*this, readSize);
+    infoCallback_->onRead(*this, readSize, hqStream->getStreamId());
   }
 
   pendingProcessReadSet_.insert(id);
@@ -1885,15 +1551,11 @@ void HQSession::HQVersionUtils::applySettings(const SettingsList& settings) {
           // this setting is stored in ingressSettings_ and enforced in the
           // StreamCodec
           break;
-        case hq::SettingId::NUM_PLACEHOLDERS:
-          numPlaceholders = setting.value;
-          break;
       }
     }
   }
   qpackCodec_.setEncoderHeaderTableSize(tableSize);
   qpackCodec_.setMaxVulnerable(blocked);
-  // TODO: set the num placeholder value
   VLOG(3) << "Applied SETTINGS sess=" << session_ << " size=" << tableSize
           << " blocked=" << blocked;
 }
@@ -1913,6 +1575,8 @@ void HQSession::onGoaway(uint64_t lastGoodStreamID,
   DCHECK_EQ(direction_, TransportDirection::UPSTREAM);
   DCHECK(version_ != HQVersion::H1Q_FB_V1);
   VLOG(3) << "Got GOAWAY maxStreamID=" << lastGoodStreamID << " sess=" << *this;
+  // TODO: drop connection with HTTP_ID_ERROR when lastGoodStreamID >
+  // maxAllowedStreamId_
   maxAllowedStreamId_ = std::min(maxAllowedStreamId_, lastGoodStreamID);
   setCloseReason(ConnectionCloseReason::GOAWAY);
   // drains existing streams and prevents new streams to be created
@@ -1939,8 +1603,50 @@ void HQSession::onGoaway(uint64_t lastGoodStreamID,
 }
 
 void HQSession::pauseTransactions() {
+  writesPaused_ = true;
   invokeOnEgressStreams(
       [](HQStreamTransportBase* stream) { stream->txn_.pauseEgress(); });
+}
+
+void HQSession::resumeTransactions() {
+  DestructorGuard g(this);
+  auto resumeFn = [this](HTTP2PriorityQueue&,
+                         HTTPCodec::StreamID id,
+                         HTTPTransaction* txn,
+                         double) {
+    if (txn && !txn->isEgressComplete() && sock_) {
+      auto flowControl = sock_->getStreamFlowControl(id);
+      if (!flowControl.hasError() && flowControl->sendWindowAvailable > 0) {
+        txn->resumeEgress();
+      }
+    }
+    return false;
+  };
+  auto stopFn = [this] { return !hasActiveTransactions(); };
+
+  txnEgressQueue_.iterateBFS(resumeFn, stopFn, true /* all */);
+  writesPaused_ = false;
+}
+
+void HQSession::setNewTransactionPauseState(HTTPTransaction* txn) {
+  bool pauseNew = writesPaused_;
+  if (!pauseNew && sock_) {
+    if (sock_->getConnectionBufferAvailable() == 0) {
+      pauseNew = true;
+    } else {
+      auto flowControl = sock_->getConnectionFlowControl();
+      if (!flowControl.hasError() && flowControl->sendWindowAvailable == 0) {
+        pauseNew = true;
+      }
+    }
+  }
+  if (pauseNew) {
+    CHECK(txn);
+    // If writes are paused, start this txn off in the egress paused state
+    VLOG(4) << *this << " starting streamID=" << txn->getID()
+            << " egress paused";
+    txn->pauseEgress();
+  }
 }
 
 void HQSession::notifyEgressBodyBuffered(int64_t bytes) {
@@ -1961,11 +1667,13 @@ void HQSession::onFlowControlUpdate(quic::StreamId id) noexcept {
 
   auto ctrlStream = findControlStream(id);
   if (ctrlStream && flowControl->sendWindowAvailable > 0) {
-    QUIC_TRACE_SOCK(stream_event,
-                    sock_,
-                    "on_flow_control",
-                    id,
-                    flowControl->sendWindowAvailable);
+    if (sock_ && sock_->getState() && sock_->getState()->qLogger) {
+      sock_->getState()->qLogger->addStreamStateUpdate(
+          id,
+          quic::getFlowControlWindowAvailable(flowControl->sendWindowAvailable),
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - ctrlStream->createdTime));
+    }
     scheduleWrite();
     return;
   }
@@ -1984,11 +1692,13 @@ void HQSession::onFlowControlUpdate(quic::StreamId id) noexcept {
       (!stream->hasPendingBody() && stream->hasPendingEOM())) {
     // TODO: are we intentionally piggyback the time value for flow control
     // window here?
-    QUIC_TRACE_SOCK(stream_event,
-                    sock_,
-                    "on_flow_control",
-                    stream->getStreamId(),
-                    flowControl->sendWindowAvailable);
+    if (sock_ && sock_->getState() && sock_->getState()->qLogger) {
+      sock_->getState()->qLogger->addStreamStateUpdate(
+          id,
+          quic::getFlowControlWindowAvailable(flowControl->sendWindowAvailable),
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - stream->createdTime));
+    }
     if (stream->hasPendingEgress()) {
       txnEgressQueue_.signalPendingEgress(stream->queueHandle_.getHandle());
     }
@@ -2055,20 +1765,19 @@ uint64_t HQSession::controlStreamWriteImpl(HQControlStream* ctrlStream,
   auto sendLen = std::min(canSend, ctrlStream->writeBuf_.chainLength());
   auto tryWriteBuf = ctrlStream->writeBuf_.splitAtMost(canSend);
 
-  CHECK_GE(sendLen, 0);
   VLOG(4) << __func__ << " before write sess=" << *this
           << ": streamID=" << egressStreamId << " maxEgress=" << maxEgress
-          << " sendWindow=" << streamSendWindow
-          << " tryToSend=" << tryWriteBuf->computeChainDataLength();
+          << " sendWindow=" << streamSendWindow << " sendLen=" << sendLen;
 
-  auto writeRes = writeBase(egressStreamId,
-                            &ctrlStream->writeBuf_,
-                            std::move(tryWriteBuf),
-                            sendLen,
-                            false,
-                            nullptr);
+  auto writeRes = sock_->writeChain(egressStreamId,
+                                    std::move(tryWriteBuf),
+                                    false /*eof*/,
+                                    false /*cork*/,
+                                    nullptr);
 
   if (writeRes.hasError()) {
+    LOG(ERROR) << " Got error=" << writeRes.error()
+               << " streamID=" << egressStreamId;
     // Going to call this a write error no matter what the underlying reason was
     handleSessionError(ctrlStream,
                        StreamDirection::EGRESS,
@@ -2077,17 +1786,15 @@ uint64_t HQSession::controlStreamWriteImpl(HQControlStream* ctrlStream,
     return 0;
   }
 
-  size_t sent = *writeRes;
   VLOG(4)
       << __func__ << " after write sess=" << *this
-      << ": streamID=" << ctrlStream->getEgressStreamId() << " sent=" << sent
+      << ": streamID=" << ctrlStream->getEgressStreamId() << " sent=" << sendLen
       << " buflen=" << static_cast<int>(ctrlStream->writeBuf_.chainLength());
   if (infoCallback_) {
-    infoCallback_->onWrite(*this, sent);
+    infoCallback_->onWrite(*this, sendLen);
   }
 
-  CHECK_GE(maxEgress, sent);
-  return sent;
+  return sendLen;
 }
 
 void HQSession::handleSessionError(HQStreamBase* stream,
@@ -2115,39 +1822,33 @@ void HQSession::handleSessionError(HQStreamBase* stream,
                << " streamID=" << id << " Dropping connection. sess=" << *this;
     appErrorMsg = "HTTP error on request stream";
     // for request streams this function must be called with an ApplicationError
-    folly::variant_match(err,
-                         [&](quic::ApplicationErrorCode /*error*/) {},
-                         [](auto&) { DCHECK(false); });
+    DCHECK(err.asApplicationErrorCode());
   }
   // errors on a control stream means we must drop the entire connection,
   // but there are some errors that we expect during shutdown
-  bool shouldDrop = folly::variant_match(
-      err,
-      [&](quic::ApplicationErrorCode error) {
-        // An ApplicationErrorCode is expected when
-        //  1. The peer resets a control stream
-        //  2. A control codec detects a connection error on a control stream
-        //  3. A stream codec detects a connection level error (eg: compression)
-        // We always want to drop the connection in these cases.
-        appError = static_cast<HTTP3::ErrorCode>(error);
-        return true;
-      },
-      [](quic::LocalErrorCode errorCode) {
-        // a LocalErrorCode::NO_ERROR is expected whenever the socket gets
-        // closed without error
-        return (errorCode != quic::LocalErrorCode::NO_ERROR);
-      },
-      [](quic::TransportErrorCode errorCode) {
-        // a TransportErrorCode::NO_ERROR is expected whenever the socket gets
-        // closed without error from the remote
-        return (errorCode != quic::TransportErrorCode::NO_ERROR);
-      },
-      [](auto&) { return true; });
-
+  bool shouldDrop = false;
+  switch (err.type()) {
+    case quic::QuicErrorCode::Type::ApplicationErrorCode_E:
+      // An ApplicationErrorCode is expected when
+      //  1. The peer resets a control stream
+      //  2. A control codec detects a connection error on a control stream
+      //  3. A stream codec detects a connection level error (eg: compression)
+      // We always want to drop the connection in these cases.
+      appError = static_cast<HTTP3::ErrorCode>(*err.asApplicationErrorCode());
+      shouldDrop = true;
+      break;
+    case quic::QuicErrorCode::Type::LocalErrorCode_E:
+      // a LocalErrorCode::NO_ERROR is expected whenever the socket gets
+      // closed without error
+      shouldDrop = (*err.asLocalErrorCode() != quic::LocalErrorCode::NO_ERROR);
+      break;
+    case quic::QuicErrorCode::Type::TransportErrorCode_E:
+      shouldDrop = true;
+      break;
+  }
   if (!shouldDrop) {
     return;
   }
-
   if (ctrlStream && appError == HTTP3::ErrorCode::HTTP_NO_ERROR) {
     // If we got a local or transport error reading or writing on a
     // control stream, send CLOSED_CRITICAL_STREAM.
@@ -2157,11 +1858,10 @@ void HQSession::handleSessionError(HQStreamBase* stream,
   // close received from the remote, we may have other readError callbacks on
   // other streams after this one. So run in the next loop callback, in this
   // same loop
-  dropConnectionAsync(std::make_pair(appError, appErrorMsg),
-                           proxygenError);
+  dropConnectionAsync(std::make_pair(appError, appErrorMsg), proxygenError);
 }
 
-void HQSession::writeRequestStreams(uint64_t maxEgress) noexcept {
+uint64_t HQSession::writeRequestStreams(uint64_t maxEgress) noexcept {
   // requestStreamWriteImpl may call txn->onWriteReady
   txnEgressQueue_.nextEgress(nextEgressResults_);
   for (auto it = nextEgressResults_.begin(); it != nextEgressResults_.end();
@@ -2175,12 +1875,13 @@ void HQSession::writeRequestStreams(uint64_t maxEgress) noexcept {
     maxEgress -= sent;
 
     if (maxEgress == 0 && std::next(it) != nextEgressResults_.end()) {
-      VLOG(2) << __func__ << " sess=" << *this
-              << "got more to send than the transport could take";
+      VLOG(3) << __func__ << " sess=" << *this
+              << " got more to send than the transport could take";
       break;
     }
   }
   nextEgressResults_.clear();
+  return maxEgress;
 }
 
 void HQSession::handleWriteError(HQStreamTransportBase* hqStream,
@@ -2190,25 +1891,29 @@ void HQSession::handleWriteError(HQStreamTransportBase* hqStream,
   HTTPException ex(HTTPException::Direction::INGRESS_AND_EGRESS,
                    folly::to<std::string>("Got error=", quic::toString(err)));
   // TODO: set Quic error when quic is OSS
-  folly::variant_match(err,
-                       [&ex](quic::ApplicationErrorCode error) {
-                         // If we have an application error code, it must have
-                         // come from the peer (most likely STOP_SENDING). This
-                         // is logically a stream abort, not a write error
-                         ex.setCodecStatusCode(hqToHttpErrorCode(
-                             static_cast<HTTP3::ErrorCode>(error)));
-                         ex.setProxygenError(kErrorStreamAbort);
-                         return true;
-                       },
-                       [&ex](quic::LocalErrorCode errorCode) {
-                         ex.setErrno(uint32_t(errorCode));
-                         ex.setProxygenError(kErrorWrite);
-                         return true;
-                       },
-                       [](quic::TransportErrorCode errorCode) {
-                         CHECK(false) << "Unexpected errorCode=" << errorCode;
-                         return false;
-                       });
+  switch (err.type()) {
+    case quic::QuicErrorCode::Type::ApplicationErrorCode_E: {
+      // If we have an application error code, it must have
+      // come from the peer (most likely STOP_SENDING). This
+      // is logically a stream abort, not a write error
+      auto h3ErrorCode =
+          static_cast<HTTP3::ErrorCode>(*err.asApplicationErrorCode());
+      ex.setCodecStatusCode(hqToHttpErrorCode(h3ErrorCode));
+      ex.setProxygenError(h3ErrorCode == HTTP3::ErrorCode::HTTP_REQUEST_REJECTED
+                              ? kErrorStreamUnacknowledged
+                              : kErrorStreamAbort);
+      break;
+    }
+    case quic::QuicErrorCode::Type::LocalErrorCode_E: {
+      ex.setErrno(uint32_t(*err.asLocalErrorCode()));
+      ex.setProxygenError(kErrorWrite);
+      break;
+    }
+    case quic::QuicErrorCode::Type::TransportErrorCode_E: {
+      CHECK(false) << "Unexpected errorCode=" << *err.asTransportErrorCode();
+      break;
+    }
+  }
   // Do I need a dguard here?
   abortStream(ex.getDirection(),
               hqStream->getStreamId(),
@@ -2216,63 +1921,27 @@ void HQSession::handleWriteError(HQStreamTransportBase* hqStream,
   hqStream->errorOnTransaction(std::move(ex));
 }
 
-folly::Expected<size_t, quic::LocalErrorCode> HQSession::writeBase(
-    quic::StreamId id,
-    folly::IOBufQueue* writeBuf,
-    std::unique_ptr<folly::IOBuf> data,
-    size_t tryToSend,
-    bool sendEof,
-    quic::QuicSocket::DeliveryCallback* deliveryCallback) {
-
-  auto writeRes = sock_->writeChain(id,
-                                    std::move(data),
-                                    sendEof,
-                                    false, // cork
-                                    deliveryCallback);
-  if (writeRes.hasError()) {
-    LOG(ERROR) << " Got error=" << writeRes.error() << " streamID=" << id;
-    return folly::makeUnexpected(writeRes.error());
-  }
-
-  auto notWrittenBuf = std::move(writeRes.value());
-  auto sent = tryToSend;
-  if (notWrittenBuf && !notWrittenBuf->empty()) {
-    // The transport gave back some data, prepend to the write buffer.
-    // According to the QuicSocket API this should never happen if we are
-    // enforcing the flow control limits
-    VLOG(4) << "stream " << id << " got "
-            << notWrittenBuf->computeChainDataLength()
-            << " bytes back from the transport";
-    sent -= notWrittenBuf->computeChainDataLength();
-    VLOG(4) << __func__ << " sess=" << *this << ": streamID=" << id
-            << " tryToSend: " << tryToSend << " actual bytes sent: " << sent;
-    auto tmpBuf = writeBuf->move();
-    writeBuf->append(std::move(notWrittenBuf));
-    writeBuf->append(std::move(tmpBuf));
-  }
-  return sent;
-}
-
 size_t HQSession::handleWrite(HQStreamTransportBase* hqStream,
                               std::unique_ptr<folly::IOBuf> data,
-                              size_t tryToSend,
+                              size_t dataChainLen,
                               bool sendEof) {
   quic::QuicSocket::DeliveryCallback* deliveryCallback =
       sendEof ? this : nullptr;
 
-  auto writeRes = writeBase(hqStream->getEgressStreamId(),
-                            &hqStream->writeBuf_,
-                            std::move(data),
-                            tryToSend,
-                            sendEof,
-                            deliveryCallback);
+  auto writeRes = sock_->writeChain(hqStream->getEgressStreamId(),
+                                    std::move(data),
+                                    sendEof,
+                                    false /*cork*/,
+                                    deliveryCallback);
   if (writeRes.hasError()) {
+    LOG(ERROR) << " Got error=" << writeRes.error()
+               << " streamID=" << hqStream->getEgressStreamId();
     handleWriteError(hqStream, writeRes.error());
     return 0;
   }
 
-  auto sent = *writeRes;
-  if (sent == tryToSend && sendEof) {
+  auto sent = dataChainLen;
+  if (sendEof) {
     // This will hold the transaction open until onDeliveryAck or onCanceled
     DCHECK(deliveryCallback);
     hqStream->txn_.incrementPendingByteEvents();
@@ -2362,13 +2031,13 @@ uint64_t HQSession::requestStreamWriteImpl(HQStreamTransportBase* hqStream,
   if (flowControlBlocked) {
     // TODO: this one doesn't create trouble, but it's certainly not logging the
     // extra params anyway.
-    QUIC_TRACE_SOCK(stream_event,
-                    sock_,
-                    "stream_blocked",
-                    streamId,
-                    streamSendWindow,
-                    canSend,
-                    (int)hqStream->hasPendingEgress());
+    if (sock_ && sock_->getState() && sock_->getState()->qLogger) {
+      sock_->getState()->qLogger->addStreamStateUpdate(
+          streamId,
+          quic::kStreamBlocked,
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - hqStream->createdTime));
+    }
   }
   // sendAbort can clear the egress queue, so this stream may no longer be
   // enqueued
@@ -2396,8 +2065,7 @@ void HQSession::onDeliveryAck(quic::StreamId id,
         std::chrono::duration_cast<std::chrono::milliseconds>(rtt));
     pEgressStream->txn_.decrementPendingByteEvents();
   } else {
-    LOG(ERROR) << __func__
-               << " not expecting to receive delivery ack for erased stream";
+    LOG(ERROR) << " not expecting to receive delivery ack for erased stream";
   }
 }
 
@@ -2442,49 +2110,6 @@ void HQSession::onGoawayAck() {
   scheduleLoopCallback(false);
 }
 
-// Push-stream implementation of the "sendPushPromise"
-// It invokes HQStreamTransport::sendPushPromise
-// Since this method does not uses codecs directly, it should not
-// set an active codec
-void HQSession::HQEgressPushStream::sendPushPromise(
-    HTTPTransaction* txn,
-    folly::Optional<hq::PushId> pushId,
-    const HTTPMessage& headers,
-    HTTPHeaderSize* size,
-    bool includeEOM) {
-
-  CHECK(txn) << "Must be invoked on a live transaction";
-  CHECK(txn->getAssocTxnId())
-      << "Must be invoked on a transaction with a parent";
-  CHECK_EQ(txn_.getID(), txn->getID()) << " Transaction stream mismatch";
-  CHECK(pushId == folly::none) << " The push id is stored in the egress stream,"
-                               << " and should not be passed by the session";
-
-  auto parentStreamId = txn->getAssocTxnId();
-  auto parentStream = session_.findNonDetachedStream(*parentStreamId);
-  if (!parentStream) {
-    session_.dropConnectionAsync(
-        std::make_pair(quic::TransportErrorCode::STREAM_STATE_ERROR,
-                       "Send push promise on a stream without a parent"),
-        kErrorConnection);
-    return;
-  }
-  // Redirect to the parent transaction
-  parentStream->sendPushPromise(txn, pushId_, headers, size, includeEOM);
-}
-
-size_t HQSession::HQEgressPushStream::generateStreamPushId() {
-  // reserve space for max quic interger len
-  folly::io::QueueAppender appender(&writeBuf_, 8);
-
-  auto externalPushId = pushId_ & ~hq::kPushIdMask;
-  auto result = quic::encodeQuicInteger(externalPushId, appender);
-  CHECK(!result.hasError())
-      << __func__ << " QUIC integer encoding error value=" << externalPushId;
-
-  return *result;
-}
-
 HQSession::HQStreamTransport* FOLLY_NULLABLE
 HQSession::createStreamTransport(quic::StreamId streamId) {
   VLOG(3) << __func__ << " sess=" << *this;
@@ -2504,7 +2129,7 @@ HQSession::createStreamTransport(quic::StreamId streamId) {
   // activation callbacks.
   // NOTE: Should this be called when an an ingress push stream
   // is created ?
-  if (numberOfStreams() == 0) {
+  if (getNumStreams() == 0) {
     if (infoCallback_) {
       infoCallback_->onActivateConnection(*this);
     }
@@ -2539,6 +2164,9 @@ HQSession::createStreamTransport(quic::StreamId streamId) {
   if (versionUtils_ && drainState_ != DrainState::NONE) {
     versionUtils_->sendGoawayOnRequestStream(matchPair.first->second);
   }
+
+  // tracks max historical streams
+  HTTPSessionBase::onNewOutgoingStream(getNumOutgoingStreams());
 
   return &matchPair.first->second;
 }
@@ -2588,9 +2216,9 @@ void HQSession::H1QFBV1VersionUtils::sendGoawayOnRequestStream(
 HQSession::HQStreamTransportBase::HQStreamTransportBase(
     HQSession& session,
     TransportDirection direction,
-    HTTPCodec::StreamID txnId,
+    quic::StreamId streamId,
     uint32_t seqNo,
-    const WheelTimerInstance& timeout,
+    const WheelTimerInstance& wheelTimer,
     HTTPSessionStats* stats,
     http2::PriorityUpdate priority,
     folly::Optional<HTTPCodec::StreamID> parentTxnId,
@@ -2598,19 +2226,19 @@ HQSession::HQStreamTransportBase::HQStreamTransportBase(
     : HQStreamBase(session, session.codec_, type),
       HTTP2PriorityQueueBase(kSessionStreamId),
       txn_(direction,
-           txnId,
+           static_cast<HTTPCodec::StreamID>(streamId),
            seqNo,
            *this,
            *this,
-           timeout.getWheelTimer(),
-           timeout.getDefaultTimeout(),
+           wheelTimer.getWheelTimer(),
+           wheelTimer.getDefaultTimeout(),
            stats,
            false, // useFlowControl
            0,     // receiveInitialWindowSize
            0,     // sendInitialWindowSize,
            priority,
            parentTxnId),
-      byteEventTracker_(nullptr) {
+      byteEventTracker_(nullptr, session.getQuicSocket(), streamId) {
   VLOG(4) << __func__ << " txn=" << txn_;
   byteEventTracker_.setTTLBAStats(session_.sessionStats_);
   quicStreamProtocolInfo_ = std::make_shared<QuicStreamProtocolInfo>();
@@ -2621,7 +2249,7 @@ void HQSession::HQStreamTransportBase::initCodec(
   VLOG(3) << where << " " << __func__ << " txn=" << txn_;
   CHECK(session_.sock_)
       << "Socket is null drainState=" << (int)session_.drainState_
-      << " streams=" << session_.numberOfStreams();
+      << " streams=" << session_.getNumStreams();
   realCodec_ = std::move(codec);
   if (session_.version_ == HQVersion::HQ) {
     auto c = dynamic_cast<hq::HQStreamCodec*>(realCodec_.get());
@@ -2639,9 +2267,9 @@ void HQSession::HQStreamTransportBase::initIngress(const std::string& where) {
   VLOG(3) << where << " " << __func__ << " txn=" << txn_;
   CHECK(session_.sock_)
       << "Socket is null drainState=" << (int)session_.drainState_
-      << " streams=" << session_.numberOfStreams();
+      << " streams=" << session_.getNumStreams();
 
-  if (session_.receiveStreamWindowSize_.hasValue()) {
+  if (session_.receiveStreamWindowSize_.has_value()) {
     session_.sock_->setStreamFlowControlWindow(
         getIngressStreamId(), session_.receiveStreamWindowSize_.value());
   }
@@ -2671,7 +2299,7 @@ HQSession::newTransaction(HTTPTransaction::Handler* handler) {
   // TODO stream limit handling
   auto quicStreamId = sock_->createBidirectionalStream();
   if (!quicStreamId) {
-    VLOG(3) << __func__ << " failed to create new stream: " << this;
+    VLOG(2) << __func__ << " failed to create new stream: " << this;
     return nullptr;
   }
 
@@ -2745,6 +2373,11 @@ bool HQSession::HQStreamTransportBase::getCurrentTransportInfo(
   return success;
 }
 
+HTTPTransaction::Transport::Type
+HQSession::HQStreamTransportBase::getSessionType() const noexcept {
+  return session_.getType();
+}
+
 void HQSession::detachStreamTransport(HQStreamTransportBase* hqStream) {
   // Special case - streams that dont have either ingress stream id
   // or egress stream id dont need to be actually detached
@@ -2759,14 +2392,11 @@ void HQSession::detachStreamTransport(HQStreamTransportBase* hqStream) {
     eraseStream(streamId);
   } else {
     VLOG(4) << __func__ << " streamID=NA";
-    auto hqPushIngressStream = dynamic_cast<HQIngressPushStream*>(hqStream);
-    CHECK(hqPushIngressStream)
-        << "Only HQIngressPushStream streams are allowed to be non-bound";
-    eraseStreamByPushId(CHECK_NOTNULL(hqPushIngressStream)->getPushId());
+    eraseUnboundStream(hqStream);
   }
 
   // If there are no established streams left, close the connection
-  if (numberOfStreams() == 0) {
+  if (getNumStreams() == 0) {
     cleanupPendingStreams();
     if (infoCallback_) {
       infoCallback_->onDeactivateConnection(*this);
@@ -2783,11 +2413,43 @@ void HQSession::detachStreamTransport(HQStreamTransportBase* hqStream) {
 }
 
 void HQSession::HQControlStream::processReadData() {
+  bool isControl = (*type_ == hq::UnidirectionalStreamType::H1Q_CONTROL ||
+                    *type_ == hq::UnidirectionalStreamType::CONTROL);
+  std::unique_ptr<HTTPCodec> savedCodec;
+  HQUnidirectionalCodec* ingressCodecPtr = ingressCodec_.get();
+  if (isControl) {
+    // We need ingressCodec_ to be realCodec_, to correctly wire up the filter
+    // chain callbacks
+    savedCodec = std::move(realCodec_);
+    realCodec_.reset(static_cast<HQControlCodec*>(ingressCodec_.release()));
+    CHECK(!ingressCodec_);
+  }
+  auto g1 = folly::makeGuard([&] {
+    if (!isControl) {
+      return;
+    }
+    CHECK(!ingressCodec_);
+    ingressCodec_.reset(static_cast<HQControlCodec*>(realCodec_.release()));
+    realCodec_ = std::move(savedCodec);
+  });
   auto g = folly::makeGuard(setActiveCodec(__func__));
-  CHECK(ingressCodec_->isIngress());
+  if (isControl) {
+    // Now ingressCodec_ has been pushed onto the codec stack.  Restore the
+    // egress codec, in case an ingress callback triggers egress
+    CHECK(!realCodec_);
+    realCodec_ = std::move(savedCodec);
+  }
+  auto g2 = folly::makeGuard([&] {
+    if (!isControl) {
+      return;
+    }
+    savedCodec = std::move(realCodec_);
+  });
+
+  CHECK(ingressCodecPtr->isIngress());
   auto initialLength = readBuf_.chainLength();
   if (initialLength > 0) {
-    auto ret = ingressCodec_->onUnidirectionalIngress(readBuf_.move());
+    auto ret = ingressCodecPtr->onUnidirectionalIngress(readBuf_.move());
     VLOG(4) << "streamID=" << getIngressStreamId() << " parsed bytes="
             << static_cast<int>(initialLength - readBuf_.chainLength())
             << " from readBuf remain=" << readBuf_.chainLength()
@@ -2795,13 +2457,12 @@ void HQSession::HQControlStream::processReadData() {
     readBuf_.append(std::move(ret));
   }
   if (readEOF_ && readBuf_.chainLength() == 0) {
-    ingressCodec_->onUnidirectionalIngressEOF();
+    ingressCodecPtr->onUnidirectionalIngressEOF();
   }
 }
 
 bool HQSession::HQStreamTransportBase::processReadData() {
   auto g = folly::makeGuard(setActiveCodec(__func__));
-  const folly::IOBuf* currentReadBuf;
   if (eomGate_.get(EOMType::CODEC) && readBuf_.chainLength() > 0) {
     // why are we calling processReadData with no data?
     VLOG(3) << " Received data after HTTP EOM for txn=" << txn_
@@ -2811,9 +2472,13 @@ bool HQSession::HQStreamTransportBase::processReadData() {
     errorOnTransaction(std::move(ex));
     return false;
   }
-  while (!ingressError_ && (currentReadBuf = readBuf_.front()) != nullptr &&
-         currentReadBuf->length() != 0) {
-    size_t bytesParsed = codecFilterChain->onIngress(*currentReadBuf);
+  while (!ingressError_ && readBuf_.chainLength() > 0) {
+    // Skip any 0 length buffers before invoking the codec. Since readBuf_ is
+    // not empty, we are guaranteed to find a non-empty buffer.
+    while (readBuf_.front()->length() == 0) {
+      readBuf_.pop_front();
+    }
+    size_t bytesParsed = codecFilterChain->onIngress(*readBuf_.front());
     VLOG(4) << "streamID=" << getStreamId()
             << " parsed bytes=" << static_cast<int>(bytesParsed)
             << " from readBuf remain=" << readBuf_.chainLength()
@@ -2832,7 +2497,7 @@ bool HQSession::HQStreamTransportBase::processReadData() {
 void HQSession::HQStreamTransportBase::processPeekData(
     const folly::Range<quic::QuicSocket::PeekIterator>& peekData) {
   auto g = folly::makeGuard(setActiveCodec(__func__));
-  CHECK(session_.versionUtils_) << ": version utils are not set";
+  CHECK(session_.versionUtils_);
 
   for (auto& item : peekData) {
     auto streamOffset = item.offset;
@@ -2841,10 +2506,11 @@ void HQSession::HQStreamTransportBase::processPeekData(
         session_.versionUtils_->onIngressPeekDataAvailable(streamOffset);
     if (bodyOffset.hasError()) {
       if (bodyOffset.error() != UnframedBodyOffsetTrackerError::NO_ERROR) {
-        LOG(ERROR) << __func__ << ": " << bodyOffset.error();
+        LOG(ERROR) << "peek: " << bodyOffset.error();
       }
     } else {
-      txn_.onIngressBodyPeek(*bodyOffset, chain);
+      CHECK(chain.front()) << "Got peek data for an empty chain.";
+      txn_.onIngressBodyPeek(*bodyOffset, *chain.front());
     }
   }
 }
@@ -2852,7 +2518,7 @@ void HQSession::HQStreamTransportBase::processPeekData(
 void HQSession::HQStreamTransportBase::processDataExpired(
     uint64_t streamOffset) {
   auto g = folly::makeGuard(setActiveCodec(__func__));
-  CHECK(session_.versionUtils_) << ": version utils are not set";
+  CHECK(session_.versionUtils_);
 
   auto bodyOffset = session_.versionUtils_->onIngressDataExpired(streamOffset);
   if (bodyOffset.hasError()) {
@@ -2866,7 +2532,7 @@ void HQSession::HQStreamTransportBase::processDataExpired(
 void HQSession::HQStreamTransportBase::processDataRejected(
     uint64_t streamOffset) {
   auto g = folly::makeGuard(setActiveCodec(__func__));
-  CHECK(session_.versionUtils_) << ": version utils are not set";
+  CHECK(session_.versionUtils_);
 
   auto bodyOffset = session_.versionUtils_->onIngressDataRejected(streamOffset);
   if (bodyOffset.hasError()) {
@@ -2919,6 +2585,19 @@ void HQSession::HQStreamTransportBase::onHeadersComplete(
     session_.scheduleLoopCallback();
   }
 
+  auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - createdTime);
+  auto sock = session_.sock_;
+  auto streamId = getStreamId();
+  if (sock && sock->getState() && sock->getState()->qLogger) {
+    sock->getState()->qLogger->addStreamStateUpdate(
+        streamId, quic::kOnHeaders, timeDiff);
+  }
+  if (sock) {
+    sock->setStreamPriority(
+        streamId, msg->getPriority(), msg->getIncremental());
+  }
+
   // Tell the HTTPTransaction to start processing the message now
   // that the full ingress headers have arrived.
   // Depending on the push promise latch, the message is delivered to
@@ -2931,14 +2610,6 @@ void HQSession::HQStreamTransportBase::onHeadersComplete(
   } else {
     txn_.onIngressHeadersComplete(std::move(msg));
   }
-
-  auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::steady_clock::now() - createdTime);
-  QUIC_TRACE_SOCK(stream_event,
-                  session_.sock_,
-                  "on_headers",
-                  getStreamId(),
-                  static_cast<uint64_t>(timeDiff.count()));
 }
 
 void HQSession::HQStreamTransportBase::transactionTimeout(
@@ -3007,7 +2678,9 @@ void HQSession::abortStream(HTTPException::Direction dir,
       (sock_->isBidirectionalStream(id) || isPeerUniStream(id))) {
     // Any INGRESS abort generates a QPACK cancel
     versionUtils_->abortStream(id);
-    sock_->stopSending(id, err);
+    // This will do the stopSending for us.
+    sock_->setReadCallback(id, nullptr, err);
+    sock_->setPeekCallback(id, nullptr);
   }
   if (dir != HTTPException::Direction::INGRESS &&
       (sock_->isBidirectionalStream(id) || isSelfUniStream(id))) {
@@ -3016,6 +2689,11 @@ void HQSession::abortStream(HTTPException::Direction dir,
 }
 
 void HQSession::HQVersionUtils::abortStream(quic::StreamId id) {
+  auto sock = session_.sock_;
+  if (sock && sock->getState() && sock->getState()->qLogger) {
+    sock->getState()->qLogger->addStreamStateUpdate(
+        id, quic::kAbort, folly::none);
+  }
   auto cancel = qpackCodec_.encodeCancelStream(id);
   auto QPACKDecoderStream =
       session_.findControlStream(hq::UnidirectionalStreamType::QPACK_DECODER);
@@ -3057,6 +2735,7 @@ void HQSession::HQStreamTransportBase::sendHeaders(HTTPTransaction* txn,
       writeBuf_, *codecStreamId_, headers, includeEOM, size);
 
   const uint64_t newOffset = streamWriteByteOffset();
+  egressHeadersStreamOffset_ = newOffset;
   if (size) {
     VLOG(4) << "sending headers, size=" << size->compressed
             << ", uncompressedSize=" << size->uncompressed << " txn=" << txn_;
@@ -3080,21 +2759,28 @@ void HQSession::HQStreamTransportBase::sendHeaders(HTTPTransaction* txn,
   }
 
   pendingEOM_ = includeEOM;
-  notifyPendingEgress();
+  // Headers can be empty for a 0.9 response
+  if (writeBuf_.chainLength() > 0 || pendingEOM_) {
+    notifyPendingEgress();
+  }
 
   auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - createdTime);
-  QUIC_TRACE_SOCK(stream_event,
-                  session_.sock_,
-                  "headers",
-                  getStreamId(),
-                  static_cast<uint64_t>(timeDiff.count()));
+  auto sock = session_.sock_;
+  auto streamId = getStreamId();
+  if (sock && sock->getState() && sock->getState()->qLogger) {
+    sock->getState()->qLogger->addStreamStateUpdate(
+        streamId, quic::kHeaders, timeDiff);
+  }
   if (includeEOM) {
-    QUIC_TRACE_SOCK(stream_event,
-                    session_.sock_,
-                    "eom",
-                    getStreamId(),
-                    static_cast<uint64_t>(timeDiff.count()));
+    if (sock && sock->getState() && sock->getState()->qLogger) {
+      sock->getState()->qLogger->addStreamStateUpdate(
+          streamId, quic::kEOM, timeDiff);
+    }
+  }
+  if (sock && headers.isRequest()) {
+    sock->setStreamPriority(
+        streamId, headers.getPriority(), headers.getIncremental());
   }
 
   // If partial reliability is enabled, enable the callbacks.
@@ -3155,11 +2841,12 @@ size_t HQSession::HQStreamTransportBase::sendEOM(
   notifyPendingEgress();
   auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - createdTime);
-  QUIC_TRACE_SOCK(stream_event,
-                  session_.sock_,
-                  "eom",
-                  getStreamId(),
-                  static_cast<uint64_t>(timeDiff.count()));
+  auto sock = session_.sock_;
+  auto streamId = getStreamId();
+  if (sock && sock->getState() && sock->getState()->qLogger) {
+    sock->getState()->qLogger->addStreamStateUpdate(
+        streamId, quic::kEOM, timeDiff);
+  }
   return encodedSize;
 }
 
@@ -3177,19 +2864,27 @@ size_t HQSession::HQStreamTransportBase::sendAbort(
 size_t HQSession::HQStreamTransportBase::sendAbortImpl(HTTP3::ErrorCode code,
                                                        std::string errorMsg) {
   VLOG(4) << __func__ << " txn=" << txn_;
-  session_.abortStream(
-      HTTPException::Direction::INGRESS_AND_EGRESS, getStreamId(), code);
 
-  abortEgress(true);
+  // If the HQ stream is bound to a transport stream, abort it.
+  if (hasStreamId()) {
+    session_.abortStream(getStreamDirection(), getStreamId(), code);
+  }
+
+  if (hasEgressStreamId()) {
+    abortEgress(true);
+  }
+  // NOTE: What about the streams that only `hasIngressStreamId()` ?
+  // At the time being, the only case of ingress-only transport stream
+  // is an ingress push stream. The essential procedure for aborting
+  // the ingress push streams is the same as above - abort the stream via
+  // sending the "stop sending" frame on the control stream.
+  //
+  // Additional logic that is specific to the ingress push stream, such as
+  // sending `CANCEL_PUSH` message, does not belong to `HQSession` level, but
+  // to `HQUpstreamSesssion::HQIngressPushStream::sendAbort`, which
+  // invokes this method.
+
   // We generated 0 application bytes so return 0?
-  auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::steady_clock::now() - createdTime);
-  QUIC_TRACE_SOCK(stream_event,
-                  session_.sock_,
-                  "abort",
-                  getStreamId(),
-                  timeDiff.count(),
-                  errorMsg);
   return 0;
 }
 
@@ -3261,11 +2956,12 @@ void HQSession::HQStreamTransportBase::onError(HTTPCodec::StreamID streamID,
   txn_.onError(error);
   auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - createdTime);
-  QUIC_TRACE_SOCK(stream_event,
-                  session_.sock_,
-                  "on_error",
-                  getStreamId(),
-                  static_cast<uint64_t>(timeDiff.count()));
+  auto sock = session_.sock_;
+  auto streamId = getStreamId();
+  if (sock && sock->getState() && sock->getState()->qLogger) {
+    sock->getState()->qLogger->addStreamStateUpdate(
+        streamId, quic::kOnError, timeDiff);
+  }
 }
 
 void HQSession::HQStreamTransportBase::onResetStream(HTTP3::ErrorCode errorCode,
@@ -3346,12 +3042,14 @@ size_t HQSession::HQStreamTransportBase::sendBody(
     pendingEOM_ = true;
     auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - createdTime);
-    QUIC_TRACE_SOCK(stream_event,
-                    session_.sock_,
-                    "eom",
-                    getStreamId(),
-                    static_cast<uint64_t>(timeDiff.count()));
+    auto sock = session_.sock_;
+    auto streamId = getStreamId();
+    if (sock && sock->getState() && sock->getState()->qLogger) {
+      sock->getState()->qLogger->addStreamStateUpdate(
+          streamId, quic::kEOM, timeDiff);
+    }
   }
+  notifyPendingEgress();
   return encodedSize;
 }
 
@@ -3390,9 +3088,9 @@ void HQSession::HQStreamTransportBase::onMessageBegin(
     constexpr auto error =
         "Received onMessageBegin in the middle of push promise";
     LOG(ERROR) << error << " streamID=" << streamID << " session=" << session_;
+    // TODO: Audit this error code
     session_.dropConnectionAsync(
-        std::make_pair(HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_PUSH_PROMISE,
-                       error),
+        std::make_pair(HTTP3::ErrorCode::HTTP_FRAME_ERROR, error),
         kErrorDropped);
     return;
   }
@@ -3423,14 +3121,14 @@ void HQSession::HQStreamTransportBase::onUnframedBodyStarted(
 folly::Expected<folly::Unit, ErrorCode> HQSession::HQStreamTransportBase::peek(
     HTTPTransaction::PeekCallback peekCallback) {
   if (!codecStreamId_) {
-    LOG(ERROR) << __func__ << ": codec streamId is not set yet";
+    LOG(ERROR) << "codec streamId is not set yet";
     return folly::makeUnexpected(ErrorCode::PROTOCOL_ERROR);
   }
 
   auto cb = [&](quic::StreamId streamId,
                 const folly::Range<quic::QuicSocket::PeekIterator>& range) {
     for (const auto& entry : range) {
-      peekCallback(streamId, entry.offset, entry.data);
+      peekCallback(streamId, entry.offset, *entry.data.front());
     }
   };
   auto res = session_.sock_->peek(*codecStreamId_, std::move(cb));
@@ -3443,7 +3141,7 @@ folly::Expected<folly::Unit, ErrorCode> HQSession::HQStreamTransportBase::peek(
 folly::Expected<folly::Unit, ErrorCode>
 HQSession::HQStreamTransportBase::consume(size_t amount) {
   if (!codecStreamId_) {
-    LOG(ERROR) << __func__ << ": codec streamId is not set yet";
+    LOG(ERROR) << "codec streamId is not set yet";
     return folly::makeUnexpected(ErrorCode::PROTOCOL_ERROR);
   }
 
@@ -3479,17 +3177,16 @@ HQSession::HQStreamTransportBase::skipBodyTo(HTTPTransaction* txn,
                                              uint64_t nextBodyOffset) {
   DCHECK(txn == &txn_);
   if (!session_.isPartialReliabilityEnabled()) {
-    LOG(ERROR) << __func__
-               << ": partially reliable operations are not supported";
+    LOG(ERROR) << "PR not supported";
     return folly::makeUnexpected(ErrorCode::PROTOCOL_ERROR);
   }
 
   auto g = folly::makeGuard(setActiveCodec(__func__));
-  CHECK(session_.versionUtils_) << ": version utils are not set";
+  CHECK(session_.versionUtils_);
 
   auto streamOffset = session_.versionUtils_->onEgressBodySkip(nextBodyOffset);
   if (streamOffset.hasError()) {
-    LOG(ERROR) << __func__ << ": " << streamOffset.error();
+    LOG(ERROR) << "skipBodyTo: " << streamOffset.error();
     HTTPException ex(HTTPException::Direction::EGRESS, "failed to send a skip");
     errorOnTransaction(std::move(ex));
     return folly::makeUnexpected(ErrorCode::INTERNAL_ERROR);
@@ -3497,7 +3194,7 @@ HQSession::HQStreamTransportBase::skipBodyTo(HTTPTransaction* txn,
 
   bytesSkipped_ += trimPendingEgressBody(*streamOffset);
 
-  CHECK(codecStreamId_) << "codecStreamId_ is not set";
+  CHECK(codecStreamId_);
   auto res = session_.sock_->sendDataExpired(*codecStreamId_, *streamOffset);
   if (res.hasValue()) {
     return *res;
@@ -3516,19 +3213,19 @@ HQSession::HQStreamTransportBase::rejectBodyTo(HTTPTransaction* txn,
   }
 
   auto g = folly::makeGuard(setActiveCodec(__func__));
-  CHECK(session_.versionUtils_) << ": version utils are not set";
+  CHECK(session_.versionUtils_);
 
   auto streamOffset =
       session_.versionUtils_->onEgressBodyReject(nextBodyOffset);
   if (streamOffset.hasError()) {
-    LOG(ERROR) << __func__ << ": " << streamOffset.error();
+    LOG(ERROR) << "rejectBodyTo: " << streamOffset.error();
     HTTPException ex(HTTPException::Direction::EGRESS,
                      "failed to send a reject");
     errorOnTransaction(std::move(ex));
     return folly::makeUnexpected(ErrorCode::INTERNAL_ERROR);
   }
 
-  CHECK(codecStreamId_) << "codecStreamId_ is not set";
+  CHECK(codecStreamId_);
   auto res = session_.sock_->sendDataRejected(*codecStreamId_, *streamOffset);
   if (res.hasValue()) {
     return *res;
@@ -3537,40 +3234,25 @@ HQSession::HQStreamTransportBase::rejectBodyTo(HTTPTransaction* txn,
   }
 }
 
-folly::Expected<folly::Unit, ErrorCode>
-HQSession::HQStreamTransportBase::trackEgressBodyDelivery(uint64_t bodyOffset) {
-  if (!session_.isPartialReliabilityEnabled()) {
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_ERROR);
-  }
-
+void HQSession::HQStreamTransportBase::trackEgressBodyDelivery(
+    uint64_t bodyOffset) {
   auto g = folly::makeGuard(setActiveCodec(__func__));
-  CHECK(session_.versionUtils_) << ": version utils are not set";
-
-  auto streamOffset = session_.versionUtils_->appToStreamOffset(bodyOffset);
-  if (streamOffset.hasError()) {
-    LOG(ERROR) << __func__
-                << ": body offset tracker error: " << streamOffset.error();
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_ERROR);
-  }
-
-  if (*streamOffset == 0) {
-    LOG(ERROR) << __func__ << ": incorrect body stream offset == 0";
-    return folly::makeUnexpected(ErrorCode::PROTOCOL_ERROR);
-  }
-
+  uint64_t streamOffset = egressHeadersStreamOffset_ + bodyOffset;
   // We need to track last byte sent offset, so substract one here.
-  armEgressBodyAckCb(*streamOffset - 1);
-
-  return folly::unit;
+  auto offset = streamOffset - 1;
+  armEgressBodyAckCb(offset);
+  VLOG(4) << __func__ << ": armed body delivery callback for offset=" << offset
+          << "; last egress headers offset=" << egressHeadersStreamOffset_
+          << "; txn=" << txn_;
 }
 
 void HQSession::HQStreamTransportBase::armStreamAckCb(uint64_t streamOffset) {
   auto res = session_.sock_->registerDeliveryCallback(
       getEgressStreamId(), streamOffset, this);
   if (res.hasError()) {
-    auto errStr = folly::sformat("failed to register delivery callback: {}",
-                                 toString(res.error()));
-    LOG(ERROR) << __func__ << ": " << errStr;
+    auto errStr = folly::to<std::string>(
+        "failed to register delivery callback: ", toString(res.error()));
+    LOG(ERROR) << errStr;
     HTTPException ex(HTTPException::Direction::INGRESS_AND_EGRESS, errStr);
     ex.setProxygenError(kErrorNetwork);
     errorOnTransaction(std::move(ex));
@@ -3589,25 +3271,33 @@ void HQSession::HQStreamTransportBase::armStreamAckCb(uint64_t streamOffset) {
 
 void HQSession::HQStreamTransportBase::armEgressHeadersAckCb(
     uint64_t streamOffset) {
+  VLOG(4) << __func__ << ": registering headers delivery callback for offset = "
+          << streamOffset << "; sess=" << session_ << "; txn=" << txn_;
   armStreamAckCb(streamOffset);
   egressHeadersAckOffset_ = streamOffset;
 }
 
 void HQSession::HQStreamTransportBase::armEgressBodyAckCb(
     uint64_t streamOffset) {
+  VLOG(4) << __func__ << ": registering body delivery callback for offset = "
+          << streamOffset << "; sess=" << session_ << "; txn=" << txn_;
   armStreamAckCb(streamOffset);
   egressBodyAckOffsets_.insert(streamOffset);
 }
 
 void HQSession::HQStreamTransportBase::handleHeadersAcked(
     uint64_t streamOffset) {
-  CHECK(egressHeadersAckOffset_) << ": egressHeadersAckOffset_ is not set";
+  CHECK(egressHeadersAckOffset_);
   if (*egressHeadersAckOffset_ != streamOffset) {
-    LOG(ERROR) << __func__
-               << ": unexpected offset for egress headers ack: expected "
-               << *egressHeadersAckOffset_ << ", received " << streamOffset;
+    LOG(ERROR)
+        << ": bad offset for egress headers ack: e=" << *egressHeadersAckOffset_
+        << ", r=" << streamOffset << "; sess=" << session_ << "; txn=" << txn_;
     return;
   }
+
+  VLOG(4) << __func__
+          << ": got delivery ack for egress headers, stream offset = "
+          << streamOffset << "; sess=" << session_ << "; txn=" << txn_;
 
   resetEgressHeadersAckOffset();
   txn_.onLastEgressHeaderByteAcked();
@@ -3615,44 +3305,29 @@ void HQSession::HQStreamTransportBase::handleHeadersAcked(
 
 void HQSession::HQStreamTransportBase::handleBodyAcked(uint64_t streamOffset) {
   auto g = folly::makeGuard(setActiveCodec(__func__));
-  CHECK(session_.versionUtils_) << ": version utils are not set";
+  CHECK(session_.versionUtils_);
 
-  auto bodyOffset = session_.versionUtils_->getEgressBodyOffset(streamOffset);
-  if (bodyOffset.hasError()) {
-    LOG(DFATAL) << __func__
-                << ": body offset tracker error: " << bodyOffset.error();
-    HTTPException ex(HTTPException::Direction::EGRESS,
-                     toString(bodyOffset.error()));
-    // Setting error to unknown here, because there is no existing error that
-    // describes wrong transport offset well enough. Plus, if this ever happens,
-    // this has to be some unknown/local/logical bug that we need to fix.
-    ex.setProxygenError(kErrorUnknown);
-    errorOnTransaction(std::move(ex));
-    return;
-  }
+  CHECK_GE(streamOffset, egressHeadersStreamOffset_);
+  uint64_t bodyOffset = streamOffset - egressHeadersStreamOffset_;
+
+  VLOG(4) << __func__
+          << ": got delivery ack for egress body, bodyOffset = " << bodyOffset
+          << "; sess=" << session_ << "; txn=" << txn_;
 
   resetEgressBodyAckOffset(streamOffset);
-  txn_.onEgressBodyBytesAcked(*bodyOffset);
+  txn_.onEgressBodyBytesAcked(bodyOffset);
 }
 
 void HQSession::HQStreamTransportBase::handleBodyCancelled(
     uint64_t streamOffset) {
   auto g = folly::makeGuard(setActiveCodec(__func__));
-  CHECK(session_.versionUtils_) << ": version utils are not set";
+  CHECK(session_.versionUtils_);
 
-  auto bodyOffset = session_.versionUtils_->getEgressBodyOffset(streamOffset);
-  if (bodyOffset.hasError()) {
-    LOG(ERROR) << __func__
-               << ": body offset tracker error: " << bodyOffset.error();
-    HTTPException ex(HTTPException::Direction::EGRESS,
-                     toString(bodyOffset.error()));
-    ex.setProxygenError(kErrorUnknown);
-    errorOnTransaction(std::move(ex));
-    return;
-  }
+  CHECK_GE(streamOffset, egressHeadersStreamOffset_);
+  uint64_t bodyOffset = streamOffset - egressHeadersStreamOffset_;
 
   resetEgressBodyAckOffset(streamOffset);
-  txn_.onEgressBodyDeliveryCanceled(*bodyOffset);
+  txn_.onEgressBodyDeliveryCanceled(bodyOffset);
 }
 
 void HQSession::HQStreamTransportBase::onDeliveryAck(
@@ -3677,8 +3352,8 @@ void HQSession::HQStreamTransportBase::onDeliveryAck(
   }
 
   LOG(DFATAL) << __func__
-             << ": received an unexpected onDeliveryAck event at offset "
-             << offset << "; sess=" << session_ << "; txn=" << txn_;
+              << ": received an unexpected onDeliveryAck event at offset "
+              << offset << "; sess=" << session_ << "; txn=" << txn_;
 }
 
 void HQSession::HQStreamTransportBase::onCanceled(quic::StreamId id,
@@ -3701,8 +3376,8 @@ void HQSession::HQStreamTransportBase::onCanceled(quic::StreamId id,
   }
 
   LOG(DFATAL) << __func__
-             << ": received an unexpected onCanceled event at offset "
-             << offset;
+              << ": received an unexpected onCanceled event at offset "
+              << offset;
 }
 
 // Methods specific to StreamTransport subclasses
@@ -3718,9 +3393,9 @@ void HQSession::HQStreamTransportBase::onPushMessageBegin(
     constexpr auto error =
         "Received onPushMessageBegin in the middle of push promise";
     LOG(ERROR) << error;
+    // TODO: Audit this error code
     session_.dropConnectionAsync(
-        std::make_pair(HTTP3::ErrorCode::HTTP_MALFORMED_FRAME_PUSH_PROMISE,
-                       error),
+        std::make_pair(HTTP3::ErrorCode::HTTP_FRAME_ERROR, error),
         kErrorDropped);
     return;
   }
@@ -3752,7 +3427,7 @@ void HQSession::HQStreamTransport::sendPushPromise(
     bool includeEOM) {
   CHECK(txn);
 
-  CHECK(pushId.hasValue()) << " Request stream impl expects pushID to be set";
+  CHECK(pushId.has_value()) << " Request stream impl expects pushID to be set";
   const uint64_t oldOffset = streamWriteByteOffset();
   auto g = folly::makeGuard(setActiveCodec(__func__));
 
@@ -3779,30 +3454,36 @@ void HQSession::HQStreamTransport::sendPushPromise(
 
   auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::steady_clock::now() - createdTime);
-  QUIC_TRACE_SOCK(stream_event,
-                  session_.sock_,
-                  "push_promise",
-                  getStreamId(),
-                  (uint64_t)timeDiff.count());
+  auto sock = session_.sock_;
+  auto streamId = getStreamId();
+  if (sock && sock->getState() && sock->getState()->qLogger) {
+    sock->getState()->qLogger->addStreamStateUpdate(
+        streamId, quic::kPushPromise, timeDiff);
+  }
   if (includeEOM) {
-    QUIC_TRACE_SOCK(stream_event,
-                    session_.sock_,
-                    "eom",
-                    getStreamId(),
-                    (uint64_t)timeDiff.count());
+    if (sock && sock->getState() && sock->getState()->qLogger) {
+      sock->getState()->qLogger->addStreamStateUpdate(
+          streamId, quic::kEOM, timeDiff);
+    }
+  }
+  if (sock) {
+    sock->setStreamPriority(
+        streamId, headers.getPriority(), headers.getIncremental());
   }
 }
 
 HTTPTransaction* FOLLY_NULLABLE
 HQSession::HQStreamTransport::newPushedTransaction(
     HTTPCodec::StreamID parentRequestStreamId,
-    HTTPTransaction::PushHandler* handler) noexcept {
+    HTTPTransaction::PushHandler* handler,
+    ProxygenError* error) noexcept {
 
   CHECK_EQ(parentRequestStreamId, txn_.getID());
 
   return session_.newPushedTransaction(
       parentRequestStreamId, // stream id of the egress push stream
-      handler);
+      handler,
+      error);
 }
 
 void HQSession::HQStreamTransport::onPushPromiseHeadersComplete(
@@ -3810,7 +3491,7 @@ void HQSession::HQStreamTransport::onPushPromiseHeadersComplete(
     HTTPCodec::StreamID assocStreamID,
     std::unique_ptr<HTTPMessage> msg) {
   VLOG(4) << "processing new Push Promise msg=" << msg.get()
-          << "streamID=" << assocStreamID << " maybePushID=" << pushID
+          << " streamID=" << assocStreamID << " maybePushID=" << pushID
           << ", txn= " << txn_;
 
   // Notify the testing callbacks
@@ -3822,6 +3503,8 @@ void HQSession::HQStreamTransport::onPushPromiseHeadersComplete(
   // Create ingress push stream (will also create the transaction)
   // If a corresponding nascent push stream is ready, it will be
   // bound to the newly created stream.
+  // virtual function call into UpstreamSession.  This will crash if it happens
+  // downstream.
   auto pushStream = session_.createIngressPushStream(assocStreamID, pushID);
   CHECK(pushStream);
 
@@ -3834,43 +3517,37 @@ void HQSession::HQStreamTransport::onPushPromiseHeadersComplete(
   pushStream->txn_.onIngressHeadersComplete(std::move(msg));
 }
 
-void HQSession::HQIngressPushStream::bindTo(quic::StreamId streamId) {
-  // Ensure the nascent push stream is in correct state
-  // and that its push id matches this stream's push id
-  DCHECK(txn_.getAssocTxnId().has_value());
-  VLOG(4) << __func__ << " Binding streamID=" << streamId
-          << " to txn=" << txn_.getID();
-  // Initialize this stream's codec with the id of the transport stream
-  auto codec = session_.versionUtils_->createCodec(streamId);
-  initCodec(std::move(codec), __func__);
-  DCHECK_EQ(*codecStreamId_, streamId);
-
-  // Now that the codec is initialized, set the stream ID
-  // of the push stream
-  setIngressStreamId(streamId);
-  DCHECK_EQ(getIngressStreamId(), streamId);
-
-  // Enable ingress on this stream. Read callback for the stream's
-  // id will be transferred to the HQSession
-  initIngress(__func__);
-
-  // Re-enable reads
-  session_.pendingProcessReadSet_.insert(streamId);
-  session_.resumeReads(streamId);
-
-  // Notify testing callbacks that a full push transaction
-  // has been successfully initialized
-  if (session_.serverPushLifecycleCb_) {
-    session_.serverPushLifecycleCb_->onPushedTxn(&txn_,
-                                                 streamId,
-                                                 getPushId(),
-                                                 txn_.getAssocTxnId().value(),
-                                                 false /* eof */);
-  }
-}
-
 std::ostream& operator<<(std::ostream& os, const HQSession& session) {
   session.describe(os);
+  return os;
+}
+
+std::ostream& operator<<(std::ostream& os, HQSession::DrainState drainState) {
+  switch (drainState) {
+    case HQSession::DrainState::NONE:
+      os << "none";
+      break;
+    case HQSession::DrainState::PENDING:
+      os << "pending";
+      break;
+    case HQSession::DrainState::CLOSE_SENT:
+      os << "close_sent";
+      break;
+    case HQSession::DrainState::CLOSE_RECEIVED:
+      os << "close_recvd";
+      break;
+    case HQSession::DrainState::FIRST_GOAWAY:
+      os << "first_goaway";
+      break;
+    case HQSession::DrainState::SECOND_GOAWAY:
+      os << "second_goaway";
+      break;
+    case HQSession::DrainState::DONE:
+      os << "done";
+      break;
+    default:
+      folly::assume_unreachable();
+  }
   return os;
 }
 

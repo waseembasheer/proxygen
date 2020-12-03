@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <deque>
@@ -35,6 +34,9 @@ extern const uint64_t kDefaultEgressNumPlaceHolders;
 extern const uint64_t kDefaultEgressMaxHeaderListSize;
 extern const uint64_t kDefaultEgressQpackBlockedStream;
 
+// The maximum client initiated bidirectional stream id in a quic varint
+constexpr uint64_t kMaxClientBidiStreamId = quic::kEightByteLimit - 3;
+
 proxygen::ErrorCode hqToHttpErrorCode(HTTP3::ErrorCode err);
 
 HTTP3::ErrorCode toHTTP3ErrorCode(proxygen::ErrorCode err);
@@ -50,8 +52,7 @@ HTTP3::ErrorCode toHTTP3ErrorCode(const HTTPException& ex);
  *  Transport error (must be from peer?) -> kErrorConnectionReset
  *  Local error -> kErrorShutdown
  */
-ProxygenError
-toProxygenError(quic::QuicErrorCode error, bool fromPeer=false);
+ProxygenError toProxygenError(quic::QuicErrorCode error, bool fromPeer = false);
 
 folly::Optional<hq::SettingId> httpToHqSettingsId(proxygen::SettingsId id);
 

@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/compress/QPACKEncoder.h>
 #include <proxygen/lib/http/codec/compress/HPACKDecodeBuffer.h>
 
@@ -14,42 +13,53 @@ using std::vector;
 
 namespace proxygen {
 
-QPACKEncoder::QPACKEncoder(bool huffman, uint32_t tableSize) :
-    HPACKEncoderBase(huffman),
-    QPACKContext(tableSize, true),
-    controlBuffer_(kBufferGrowth, huffman),
-    maxTableSize_(tableSize) {
+QPACKEncoder::QPACKEncoder(bool huffman, uint32_t tableSize)
+    : HPACKEncoderBase(huffman),
+      QPACKContext(tableSize, true),
+      controlBuffer_(kBufferGrowth, huffman),
+      maxTableSize_(tableSize) {
   // Default the encoder indexing strategy; it can be updated later as well
   setHeaderIndexingStrategy(HeaderIndexingStrategy::getDefaultInstance());
 }
 
-QPACKEncoder::EncodeResult
-QPACKEncoder::encode(const vector<HPACKHeader>& headers,
-                     uint32_t headroom,
-                     uint64_t streamId,
-                     uint32_t maxEncoderStreamBytes) {
+QPACKEncoder::EncodeResult QPACKEncoder::encode(
+    const vector<HPACKHeader>& headers,
+    uint32_t headroom,
+    uint64_t streamId,
+    uint32_t maxEncoderStreamBytes) {
+  // This routine is now used only for testing
+  folly::IOBufQueue controlQueue{folly::IOBufQueue::cacheChainLength()};
+  startEncode(controlQueue, headroom, maxEncoderStreamBytes);
+  auto baseIndex = table_.getInsertCount();
+
+  uint32_t requiredInsertCount = 0;
+  for (const auto& header : headers) {
+    encodeHeaderQ(HPACKHeaderName(header.name),
+                  header.value,
+                  baseIndex,
+                  /*ref*/ requiredInsertCount);
+  }
+
+  return {controlQueue.move(),
+          completeEncode(streamId, baseIndex, requiredInsertCount)};
+}
+
+uint32_t QPACKEncoder::startEncode(folly::IOBufQueue& controlQueue,
+                                   uint32_t headroom,
+                                   uint32_t maxEncoderStreamBytes) {
+  controlBuffer_.setWriteBuf(&controlQueue);
   if (headroom) {
     streamBuffer_.addHeadroom(headroom);
   }
   maxEncoderStreamBytes_ = maxEncoderStreamBytes;
   maxEncoderStreamBytes_ -=
-    handlePendingContextUpdate(controlBuffer_, table_.capacity());
-  return encodeQ(headers, streamId);
+      handlePendingContextUpdate(controlBuffer_, table_.capacity());
+
+  return table_.getInsertCount();
 }
 
-QPACKEncoder::EncodeResult
-QPACKEncoder::encodeQ(const vector<HPACKHeader>& headers, uint64_t streamId) {
-  OutstandingBlock outstandingBlock;
-  // curOutstanding_ points to a local stack variable, it's mostly for
-  // convenience so other methods invoked from here can access it.
-  curOutstanding_ = &outstandingBlock;
-  auto baseIndex = table_.getInsertCount();
-
-  uint32_t requiredInsertCount = 0;
-  for (const auto& header: headers) {
-    encodeHeaderQ(header, baseIndex, &requiredInsertCount);
-  }
-
+std::unique_ptr<folly::IOBuf> QPACKEncoder::completeEncode(
+    uint64_t streamId, uint32_t baseIndex, uint32_t requiredInsertCount) {
   auto streamBlock = streamBuffer_.release();
 
   // encode the prefix
@@ -58,7 +68,7 @@ QPACKEncoder::encodeQ(const vector<HPACKHeader>& headers, uint64_t streamId) {
     streamBuffer_.encodeInteger(0); // delta base
   } else {
     auto wireRIC =
-      (requiredInsertCount % (2 * getMaxEntries(maxTableSize_))) + 1;
+        (requiredInsertCount % (2 * getMaxEntries(maxTableSize_))) + 1;
     streamBuffer_.encodeInteger(wireRIC);
     if (requiredInsertCount > baseIndex) {
       streamBuffer_.encodeInteger(requiredInsertCount - baseIndex - 1,
@@ -71,40 +81,44 @@ QPACKEncoder::encodeQ(const vector<HPACKHeader>& headers, uint64_t streamId) {
     }
   }
   auto streamBuffer = streamBuffer_.release();
-  streamBuffer->prependChain(std::move(streamBlock));
+  if (streamBlock) {
+    streamBuffer->prependChain(std::move(streamBlock));
+  }
 
-  auto controlBuf = controlBuffer_.release();
   // curOutstanding_.references could be empty, if the block encodes only static
   // headers and/or literals.  If so we don't track anything.
-  if (!curOutstanding_->references.empty()) {
-    if (curOutstanding_->vulnerable) {
+  if (!curOutstanding_.references.empty()) {
+    if (curOutstanding_.vulnerable) {
       DCHECK(allowVulnerable());
       numVulnerable_++;
     }
     numOutstandingBlocks_++;
-    outstanding_[streamId].emplace_back(std::move(outstandingBlock));
+    outstanding_[streamId].emplace_back(std::move(curOutstanding_));
+    curOutstanding_.vulnerable = false;
   }
-  // Clear the pointer to our stack
-  curOutstanding_ = nullptr;
 
-  return { std::move(controlBuf), std::move(streamBuffer) };
+  controlBuffer_.setWriteBuf(nullptr);
+  return streamBuffer;
 }
 
-void QPACKEncoder::encodeHeaderQ(
-  const HPACKHeader& header, uint32_t baseIndex,
-  uint32_t* requiredInsertCount) {
-  uint32_t index = getStaticTable().getIndex(header);
+size_t QPACKEncoder::encodeHeaderQ(HPACKHeaderName name,
+                                   folly::StringPiece value,
+                                   uint32_t baseIndex,
+                                   uint32_t& requiredInsertCount) {
+  size_t uncompressed = HPACKHeader::realBytes(name.size(), value.size()) + 2;
+  uint32_t index = getStaticTable().getIndex(name, value);
   if (index > 0) {
     // static reference
+    staticRefs_++;
     streamBuffer_.encodeInteger(index - 1,
                                 HPACK::Q_INDEXED.code | HPACK::Q_INDEXED_STATIC,
                                 HPACK::Q_INDEXED.prefixLength);
-    return;
+    return uncompressed;
   }
 
-  bool indexable = shouldIndex(header);
+  bool indexable = shouldIndex(name, value);
   if (indexable) {
-    index = table_.getIndex(header, allowVulnerable());
+    index = table_.getIndex(name, value, allowVulnerable());
     if (index == QPACKHeaderTable::UNACKED) {
       index = 0;
       indexable = false;
@@ -122,35 +136,46 @@ void QPACKEncoder::encodeHeaderQ(
     uint32_t nameIndex = 0;
     uint32_t absoluteNameIndex = 0;
     bool isStaticName = false;
-    std::tie(isStaticName, nameIndex, absoluteNameIndex) =
-      getNameIndexQ(header.name);
+    std::tie(isStaticName, nameIndex, absoluteNameIndex) = getNameIndexQ(name);
 
     // Now check if we should emit an insertion on the control stream
     // Don't try to index if we're out of encoder flow control
     indexable &= maxEncoderStreamBytes_ > 0;
-    if (indexable && table_.canIndex(header)) {
-      encodeInsertQ(header, isStaticName, nameIndex);
-      CHECK(table_.add(header.copy()));
-      if (allowVulnerable() && lastEntryAvailable()) {
-        index = table_.getInsertCount();
-      } else {
-        index = 0;
-        if (absoluteNameIndex > 0 &&
-            !table_.isValid(table_.absoluteToRelative(absoluteNameIndex))) {
-          // The insert may have invalidated the name index.
-          isStaticName = true;
-          nameIndex = 0;
-          absoluteNameIndex = 0;
+    if (indexable) {
+      if (table_.canIndex(name, value)) {
+        encodeInsertQ(name, value, isStaticName, nameIndex);
+        CHECK(table_.add(HPACKHeader(std::move(name), value)));
+        if (allowVulnerable() && lastEntryAvailable()) {
+          index = table_.getInsertCount();
+          // name is invalid on this branch, but index must be non-zero since
+          // we inserted just above.
+        } else {
+          // We still need name.  Get it from the table
+          name = getHeader(false, 1, table_.getInsertCount(), false).name;
+          index = 0;
+          if (absoluteNameIndex > 0 &&
+              !table_.isValid(table_.absoluteToRelative(absoluteNameIndex))) {
+            // The insert may have invalidated the name index.
+            isStaticName = true;
+            nameIndex = 0;
+            absoluteNameIndex = 0;
+          }
         }
+      } else {
+        blockedInsertions_++;
       }
     }
-
     if (index == 0) {
       // Couldn't insert it: table full, not indexable, or table contains
       // vulnerable reference.  Encode a literal on the request stream.
-      encodeStreamLiteralQ(header, isStaticName, nameIndex, absoluteNameIndex,
-                           baseIndex, requiredInsertCount);
-      return;
+      encodeStreamLiteralQ(name,
+                           value,
+                           isStaticName,
+                           nameIndex,
+                           absoluteNameIndex,
+                           baseIndex,
+                           requiredInsertCount);
+      return uncompressed;
     }
   }
 
@@ -162,29 +187,31 @@ void QPACKEncoder::encodeHeaderQ(
   } else {
     streamBuffer_.encodeInteger(baseIndex - index, HPACK::Q_INDEXED);
   }
+  return uncompressed;
 }
 
-bool QPACKEncoder::shouldIndex(const HPACKHeader& header) const {
-  return (header.bytes() <= table_.capacity()) &&
-    (!indexingStrat_ || indexingStrat_->indexHeader(header)) &&
-    dynamicReferenceAllowed();
+bool QPACKEncoder::shouldIndex(const HPACKHeaderName& name,
+                               folly::StringPiece value) const {
+  return (HPACKHeader::bytes(name.size(), value.size()) <= table_.capacity()) &&
+         (!indexingStrat_ || indexingStrat_->indexHeader(name, value)) &&
+         dynamicReferenceAllowed();
 }
 
 bool QPACKEncoder::dynamicReferenceAllowed() const {
   return numOutstandingBlocks_ < maxNumOutstandingBlocks_;
 }
 
-std::pair<bool, uint32_t> QPACKEncoder::maybeDuplicate(
-      uint32_t relativeIndex) {
+std::pair<bool, uint32_t> QPACKEncoder::maybeDuplicate(uint32_t relativeIndex) {
   auto res = table_.maybeDuplicate(relativeIndex, allowVulnerable());
   if (res.first) {
     VLOG(4) << "Encoded duplicate index=" << relativeIndex;
+    duplications_++;
     encodeDuplicate(relativeIndex);
     // Note we will emit duplications even when we are out of flow control,
     // but we won't reference them (eg: like we were at vulnerable max).
     if (!lastEntryAvailable()) {
       VLOG(4) << "Duplicate is not usable because it overran encoder flow "
-        "control";
+                 "control";
       return {true, 0};
     }
   }
@@ -192,7 +219,7 @@ std::pair<bool, uint32_t> QPACKEncoder::maybeDuplicate(
 }
 
 std::tuple<bool, uint32_t, uint32_t> QPACKEncoder::getNameIndexQ(
-  const HPACKHeaderName& headerName) {
+    const HPACKHeaderName& headerName) {
   uint32_t absoluteNameIndex = 0;
   uint32_t nameIndex = getStaticTable().nameIndex(headerName);
   bool isStatic = true;
@@ -211,44 +238,49 @@ std::tuple<bool, uint32_t, uint32_t> QPACKEncoder::getNameIndexQ(
     }
   }
   return std::tuple<bool, uint32_t, uint32_t>(
-    isStatic, nameIndex, absoluteNameIndex);
+      isStatic, nameIndex, absoluteNameIndex);
 }
 
-void QPACKEncoder::encodeStreamLiteralQ(
-  const HPACKHeader& header, bool isStaticName, uint32_t nameIndex,
-  uint32_t absoluteNameIndex, uint32_t baseIndex,
-  uint32_t* requiredInsertCount) {
+size_t QPACKEncoder::encodeStreamLiteralQ(const HPACKHeaderName& name,
+                                          folly::StringPiece value,
+                                          bool isStaticName,
+                                          uint32_t nameIndex,
+                                          uint32_t absoluteNameIndex,
+                                          uint32_t baseIndex,
+                                          uint32_t& requiredInsertCount) {
   if (absoluteNameIndex > 0) {
     // Dynamic name reference, vulnerability checks already done
     CHECK(absoluteNameIndex <= baseIndex || allowVulnerable());
     trackReference(absoluteNameIndex, requiredInsertCount);
   }
   if (absoluteNameIndex > baseIndex) {
-    encodeLiteralQ(header,
-                   false, /* not static */
-                   true, /* post base */
-                   absoluteNameIndex - baseIndex,
-                   HPACK::Q_LITERAL_NAME_REF_POST);
+    return encodeLiteralQ(name,
+                          value,
+                          false, /* not static */
+                          true,  /* post base */
+                          absoluteNameIndex - baseIndex,
+                          HPACK::Q_LITERAL_NAME_REF_POST);
   } else {
-    encodeLiteralQ(header,
-                   isStaticName,
-                   false, /* not post base */
-                   isStaticName ? nameIndex : baseIndex - absoluteNameIndex + 1,
-                   HPACK::Q_LITERAL_NAME_REF);
+    return encodeLiteralQ(name,
+                          value,
+                          isStaticName,
+                          false, /* not post base */
+                          isStaticName ? nameIndex
+                                       : baseIndex - absoluteNameIndex + 1,
+                          HPACK::Q_LITERAL_NAME_REF);
   }
 }
 
 void QPACKEncoder::trackReference(uint32_t absoluteIndex,
-                                  uint32_t* requiredInsertCount) {
+                                  uint32_t& requiredInsertCount) {
   CHECK_NE(absoluteIndex, 0);
-  CHECK(curOutstanding_);
-  if (absoluteIndex > *requiredInsertCount) {
-    *requiredInsertCount = absoluteIndex;
+  if (absoluteIndex > requiredInsertCount) {
+    requiredInsertCount = absoluteIndex;
     if (table_.isVulnerable(absoluteIndex)) {
-      curOutstanding_->vulnerable = true;
+      curOutstanding_.vulnerable = true;
     }
   }
-  auto res = curOutstanding_->references.insert(absoluteIndex);
+  auto res = curOutstanding_.references.insert(absoluteIndex);
   if (res.second) {
     VLOG(5) << "Bumping refcount for absoluteIndex=" << absoluteIndex;
     table_.addRef(absoluteIndex);
@@ -258,34 +290,45 @@ void QPACKEncoder::trackReference(uint32_t absoluteIndex,
 void QPACKEncoder::encodeDuplicate(uint32_t index) {
   DCHECK_GT(index, 0);
   maxEncoderStreamBytes_ -=
-    controlBuffer_.encodeInteger(index - 1, HPACK::Q_DUPLICATE);
+      controlBuffer_.encodeInteger(index - 1, HPACK::Q_DUPLICATE);
 }
 
-void QPACKEncoder::encodeInsertQ(const HPACKHeader& header,
+void QPACKEncoder::encodeInsertQ(const HPACKHeaderName& name,
+                                 folly::StringPiece value,
                                  bool isStaticName,
                                  uint32_t nameIndex) {
-  auto encoded = encodeLiteralQHelper(
-      controlBuffer_, header, isStaticName, nameIndex,
-      HPACK::Q_INSERT_NAME_REF_STATIC, HPACK::Q_INSERT_NAME_REF,
-      HPACK::Q_INSERT_NO_NAME_REF);
+  auto encoded = encodeLiteralQHelper(controlBuffer_,
+                                      name,
+                                      value,
+                                      isStaticName,
+                                      nameIndex,
+                                      HPACK::Q_INSERT_NAME_REF_STATIC,
+                                      HPACK::Q_INSERT_NAME_REF,
+                                      HPACK::Q_INSERT_NO_NAME_REF);
   maxEncoderStreamBytes_ -= encoded;
 }
 
-void QPACKEncoder::encodeLiteralQ(const HPACKHeader& header,
-                                  bool isStaticName,
-                                  bool postBase,
-                                  uint32_t nameIndex,
-                                  const HPACK::Instruction& idxInstr) {
+size_t QPACKEncoder::encodeLiteralQ(const HPACKHeaderName& name,
+                                    folly::StringPiece value,
+                                    bool isStaticName,
+                                    bool postBase,
+                                    uint32_t nameIndex,
+                                    const HPACK::Instruction& idxInstr) {
   DCHECK(!isStaticName || !postBase);
-  encodeLiteralQHelper(
-      streamBuffer_, header, isStaticName, nameIndex,
-      HPACK::Q_LITERAL_STATIC, idxInstr,
-      HPACK::Q_LITERAL);
+  return encodeLiteralQHelper(streamBuffer_,
+                              name,
+                              value,
+                              isStaticName,
+                              nameIndex,
+                              HPACK::Q_LITERAL_STATIC,
+                              idxInstr,
+                              HPACK::Q_LITERAL);
 }
 
 uint32_t QPACKEncoder::encodeLiteralQHelper(
     HPACKEncodeBuffer& buffer,
-    const HPACKHeader& header,
+    const HPACKHeaderName& name,
+    folly::StringPiece value,
     bool isStaticName,
     uint32_t nameIndex,
     uint8_t staticFlag,
@@ -299,15 +342,17 @@ uint32_t QPACKEncoder::encodeLiteralQHelper(
     nameIndex -= 1; // we already know it's not 0
     uint8_t byte = idxInstr.code;
     if (isStaticName) {
+      // This counts static refs on the encoder stream
+      staticRefs_++;
       byte |= staticFlag;
     }
     encoded += buffer.encodeInteger(nameIndex, byte, idxInstr.prefixLength);
   } else {
-    encoded += buffer.encodeLiteral(litInstr.code, litInstr.prefixLength,
-                                    header.name.get());
+    encoded +=
+        buffer.encodeLiteral(litInstr.code, litInstr.prefixLength, name.get());
   }
   // value
-  encoded += buffer.encodeLiteral(header.value);
+  encoded += buffer.encodeLiteral(value);
   return encoded;
 }
 
@@ -315,7 +360,9 @@ HPACK::DecodeError QPACKEncoder::decodeDecoderStream(
     std::unique_ptr<folly::IOBuf> buf) {
   decoderIngress_.append(std::move(buf));
   folly::io::Cursor cursor(decoderIngress_.front());
-  HPACKDecodeBuffer dbuf(cursor, decoderIngress_.chainLength(), 0,
+  HPACKDecodeBuffer dbuf(cursor,
+                         decoderIngress_.chainLength(),
+                         0,
                          /* endOfBufferIsError= */ false);
   HPACK::DecodeError err = HPACK::DecodeError::NONE;
   uint32_t consumed = 0;
@@ -380,13 +427,13 @@ HPACK::DecodeError QPACKEncoder::onHeaderAck(uint64_t streamId, bool all) {
     }
   }
   DCHECK(!it->second.empty()) << "Invariant violation: no blocks in stream "
-     "record";
-  VLOG(5) << ((all) ? "onCancelStream" : "onHeaderAck") << " streamId="
-          << streamId;
+                                 "record";
+  VLOG(5) << ((all) ? "onCancelStream" : "onHeaderAck")
+          << " streamId=" << streamId;
   if (all) {
     // Happens when a stream is reset
-    for (auto& block: it->second) {
-      for (auto i: block.references) {
+    for (auto& block : it->second) {
+      for (auto i : block.references) {
         VLOG(5) << "Decrementing refcount for absoluteIndex=" << i;
         table_.subRef(i);
       }
@@ -401,7 +448,7 @@ HPACK::DecodeError QPACKEncoder::onHeaderAck(uint64_t streamId, bool all) {
     numOutstandingBlocks_--;
     it->second.pop_front();
     // a different stream, sub all the references
-    for (auto i: block.references) {
+    for (auto i : block.references) {
       VLOG(5) << "Decrementing refcount for absoluteIndex=" << i;
       table_.subRef(i);
     }
@@ -426,4 +473,4 @@ void QPACKEncoder::setMaxNumOutstandingBlocks(uint32_t value) {
   maxNumOutstandingBlocks_ = value;
 }
 
-}
+} // namespace proxygen

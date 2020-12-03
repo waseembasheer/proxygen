@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <glog/logging.h>
@@ -23,23 +22,14 @@ namespace proxygen {
 
 class QPACKHeaderTable : public HeaderTable {
  public:
-  enum {
-    UNACKED = std::numeric_limits<uint32_t>::max()
-  };
+  enum { UNACKED = std::numeric_limits<uint32_t>::max() };
 
   QPACKHeaderTable(uint32_t capacityVal, bool trackReferences);
 
-  ~QPACKHeaderTable() {}
+  ~QPACKHeaderTable() {
+  }
   QPACKHeaderTable(const QPACKHeaderTable&) = delete;
   QPACKHeaderTable& operator=(const QPACKHeaderTable&) = delete;
-
-  /**
-   * Return Insert Count - the total number of headers inserted to this table,
-   * including evictions
-   */
-  uint32_t getInsertCount() const {
-    return insertCount_;
-  }
 
   /**
    * Returns true if the absolute index has not been ack'ed yet.
@@ -52,10 +42,11 @@ class QPACKHeaderTable : public HeaderTable {
    * Returns true if the header can be added to the table.  May be linear
    * in the number of entries
    */
-  bool canIndex(const HPACKHeader& header) {
-    auto totalBytes = bytes_ + header.bytes();
+  bool canIndex(const HPACKHeaderName& name, folly::StringPiece value) {
+    auto headerBytes = HPACKHeader::bytes(name.size(), value.size());
+    auto totalBytes = bytes_ + headerBytes;
     // Don't index headers that would immediately be drained
-    return ((header.bytes() <= (capacity_ - minFree_)) &&
+    return ((headerBytes <= (capacity_ - minFree_)) &&
             (totalBytes <= capacity_ || canEvict(totalBytes - capacity_)));
   }
 
@@ -72,8 +63,8 @@ class QPACKHeaderTable : public HeaderTable {
    * may return 0 if the entry at relativeIndex was draining and could not be
    * duplicated, or vulnerable references are not allowed.
    */
-  std::pair<bool, uint32_t> maybeDuplicate(
-    uint32_t relativeIndex, bool allowVulnerable);
+  std::pair<bool, uint32_t> maybeDuplicate(uint32_t relativeIndex,
+                                           bool allowVulnerable);
 
   /**
    * Add the header entry at the beginning of the table (index=1)
@@ -98,6 +89,10 @@ class QPACKHeaderTable : public HeaderTable {
    * @return 0 in case the header is not found
    */
   uint32_t getIndex(const HPACKHeader& header,
+                    bool allowVulnerable = true) const;
+
+  uint32_t getIndex(const HPACKHeaderName& name,
+                    folly::StringPiece value,
                     bool allowVulnerable = true) const;
 
   /**
@@ -130,9 +125,9 @@ class QPACKHeaderTable : public HeaderTable {
     // compare this way to avoid overflow
     if (numInserts > insertCount_ ||
         ackedInsertCount_ > insertCount_ - numInserts) {
-      LOG(ERROR) << "Decoder ack'd too much: ackedInsertCount_="
-                 << ackedInsertCount_ << " insertCount_=" << insertCount_
-                 << " numInserts=" << numInserts;
+      LOG(ERROR)
+          << "Decoder ack'd too much: ackedInsertCount_=" << ackedInsertCount_
+          << " insertCount_=" << insertCount_ << " numInserts=" << numInserts;
       return false;
     }
     ackedInsertCount_ += numInserts;
@@ -180,9 +175,9 @@ class QPACKHeaderTable : public HeaderTable {
    * Shared implementation for getIndex and nameIndex
    */
   uint32_t getIndexImpl(const HPACKHeaderName& header,
-                        const folly::fbstring& value,
+                        folly::StringPiece value,
                         bool nameOnly,
-                        bool allowVulnerable=true) const;
+                        bool allowVulnerable = true) const;
 
   /*
    * Increase table length to newLength
@@ -191,7 +186,8 @@ class QPACKHeaderTable : public HeaderTable {
 
   void resizeTable(uint32_t newLength) override;
 
-  void updateResizedTable(uint32_t oldTail, uint32_t oldLength,
+  void updateResizedTable(uint32_t oldTail,
+                          uint32_t oldLength,
                           uint32_t newLength) override;
   /**
    * Removes one header entry from the beginning of the header table.
@@ -213,16 +209,14 @@ class QPACKHeaderTable : public HeaderTable {
    */
   uint32_t toInternal(uint32_t externalIndex, uint32_t base) const;
 
-
   uint32_t internalToAbsolute(uint32_t internalIndex) const;
   uint32_t absoluteToInternal(uint32_t absoluteIndex) const;
 
-  uint32_t insertCount_{0};
   uint32_t drainedBytes_{0};
   uint32_t minUsable_{1};
   uint32_t ackedInsertCount_{0};
-  std::unique_ptr<std::vector<uint16_t>> refCount_;
   uint32_t minFree_{0};
+  std::unique_ptr<std::vector<uint16_t>> refCount_;
 };
 
-}
+} // namespace proxygen

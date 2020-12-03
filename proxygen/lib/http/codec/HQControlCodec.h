@@ -1,21 +1,22 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/lib/http/codec/HQFramedCodec.h>
 #include <proxygen/lib/http/codec/HQFramer.h>
 #include <proxygen/lib/http/codec/HQUnidirectionalCodec.h>
+#include <proxygen/lib/http/codec/HQUtils.h>
 #include <proxygen/lib/http/codec/HTTPCodec.h>
 #include <proxygen/lib/http/codec/compress/QPACKCodec.h>
 
 #include <folly/io/IOBuf.h>
+#include <folly/lang/Assume.h>
 
 namespace proxygen { namespace hq {
 
@@ -55,8 +56,7 @@ class HQControlCodec
     if (callback_) {
       HTTPException ex(HTTPException::Direction::INGRESS_AND_EGRESS,
                        "Control stream EOF");
-      ex.setErrno(
-          uint32_t(HTTP3::ErrorCode::HTTP_CLOSED_CRITICAL_STREAM));
+      ex.setErrno(uint32_t(HTTP3::ErrorCode::HTTP_CLOSED_CRITICAL_STREAM));
       callback_->onError(streamId_, ex, false);
     }
   }
@@ -70,7 +70,7 @@ class HQControlCodec
 
   size_t onIngress(const folly::IOBuf& /*buf*/) override {
     LOG(FATAL) << __func__ << " not supported";
-    __builtin_unreachable();
+    folly::assume_unreachable();
   }
 
   void onIngressEOF() override {
@@ -101,7 +101,7 @@ class HQControlCodec
 
   uint32_t getDefaultWindowSize() const override {
     CHECK(false) << __func__ << " not supported";
-    __builtin_unreachable();
+    folly::assume_unreachable();
   }
 
   bool peerHasWebsockets() const {
@@ -114,7 +114,7 @@ class HQControlCodec
 
   CompressionInfo getCompressionInfo() const override {
     CHECK(false) << __func__ << " not supported";
-    __builtin_unreachable();
+    folly::assume_unreachable();
   }
 
   size_t addPriorityNodes(PriorityQueue& queue,
@@ -125,8 +125,6 @@ class HQControlCodec
 
  protected:
   ParseResult checkFrameAllowed(FrameType type) override;
-  ParseResult parsePriority(folly::io::Cursor& cursor,
-                            const FrameHeader& header) override;
   ParseResult parseCancelPush(folly::io::Cursor& cursor,
                               const FrameHeader& header) override;
   ParseResult parseSettings(folly::io::Cursor& cursor,
@@ -140,7 +138,7 @@ class HQControlCodec
   bool sentGoaway_{false};
   bool receivedSettings_{false};
   bool sentSettings_{false};
-  quic::StreamId maxSeenLastStream_{quic::kEightByteLimit};
+  quic::StreamId maxSeenLastStream_{kMaxClientBidiStreamId};
   HTTPSettings& settings_;
 };
 

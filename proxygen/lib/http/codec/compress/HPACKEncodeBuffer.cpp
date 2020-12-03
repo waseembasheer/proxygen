@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/compress/HPACKEncodeBuffer.h>
 
 #include <memory>
@@ -15,33 +14,30 @@
 #include <proxygen/lib/utils/Logging.h>
 
 using folly::IOBuf;
-using proxygen::huffman::HuffTree;
 using std::string;
 using std::unique_ptr;
 
 namespace proxygen {
 
-HPACKEncodeBuffer::HPACKEncodeBuffer(
-  uint32_t growthSize,
-  bool huffmanEnabled) :
-    buf_(&bufQueue_, growthSize),
-    growthSize_(growthSize),
-    huffmanEnabled_(huffmanEnabled) {
+HPACKEncodeBuffer::HPACKEncodeBuffer(uint32_t growthSize, bool huffmanEnabled)
+    : buf_(&bufQueue_, growthSize),
+      growthSize_(growthSize),
+      huffmanEnabled_(huffmanEnabled) {
 }
 
-HPACKEncodeBuffer::HPACKEncodeBuffer(uint32_t growthSize) :
-    buf_(&bufQueue_, growthSize),
-    growthSize_(growthSize),
-    huffmanEnabled_(false) {
+HPACKEncodeBuffer::HPACKEncodeBuffer(uint32_t growthSize)
+    : buf_(&bufQueue_, growthSize),
+      growthSize_(growthSize),
+      huffmanEnabled_(false) {
 }
 
 void HPACKEncodeBuffer::addHeadroom(uint32_t headroom) {
   // we expect that this function is called before any encoding happens
-  CHECK(bufQueue_.front() == nullptr);
+  CHECK(bufQueuePtr_->front() == nullptr);
   // create a custom IOBuf and add it to the queue
   unique_ptr<IOBuf> buf = IOBuf::create(std::max(headroom, growthSize_));
   buf->advance(headroom);
-  bufQueue_.append(std::move(buf));
+  bufQueuePtr_->append(std::move(buf));
 }
 
 void HPACKEncodeBuffer::append(uint8_t byte) {
@@ -53,12 +49,12 @@ uint32_t HPACKEncodeBuffer::encodeInteger(uint64_t value) {
 }
 
 uint32_t HPACKEncodeBuffer::encodeInteger(
-  uint64_t value,
-  const HPACK::Instruction& instruction) {
+    uint64_t value, const HPACK::Instruction& instruction) {
   return encodeInteger(value, instruction.code, instruction.prefixLength);
 }
 
-uint32_t HPACKEncodeBuffer::encodeInteger(uint64_t value, uint8_t instruction,
+uint32_t HPACKEncodeBuffer::encodeInteger(uint64_t value,
+                                          uint8_t instruction,
                                           uint8_t nbit) {
   CHECK(nbit > 0 && nbit <= 8);
   uint32_t count = 0;
@@ -106,7 +102,8 @@ uint32_t HPACKEncodeBuffer::encodeHuffman(folly::StringPiece literal) {
  *
  * | instruction | 1 | Length... | Huffman Coded Literal |
  */
-uint32_t HPACKEncodeBuffer::encodeHuffman(uint8_t instruction, uint8_t nbit,
+uint32_t HPACKEncodeBuffer::encodeHuffman(uint8_t instruction,
+                                          uint8_t nbit,
                                           folly::StringPiece literal) {
   static const auto& huffmanTree = huffman::huffTree();
   uint32_t size = huffmanTree.getEncodeSize(literal);
@@ -124,14 +121,14 @@ uint32_t HPACKEncodeBuffer::encodeLiteral(folly::StringPiece literal) {
   return encodeLiteral(0, 7, literal);
 }
 
-uint32_t HPACKEncodeBuffer::encodeLiteral(uint8_t instruction, uint8_t nbit,
+uint32_t HPACKEncodeBuffer::encodeLiteral(uint8_t instruction,
+                                          uint8_t nbit,
                                           folly::StringPiece literal) {
   if (huffmanEnabled_) {
     return encodeHuffman(instruction, nbit, literal);
   }
   // otherwise use simple layout
-  uint32_t count =
-    encodeInteger(literal.size(), instruction, nbit);
+  uint32_t count = encodeInteger(literal.size(), instruction, nbit);
   // copy the entire string
   buf_.push((uint8_t*)literal.data(), literal.size());
   count += literal.size();
@@ -139,7 +136,7 @@ uint32_t HPACKEncodeBuffer::encodeLiteral(uint8_t instruction, uint8_t nbit,
 }
 
 string HPACKEncodeBuffer::toBin() {
-  return IOBufPrinter::printBin(bufQueue_.front());
+  return IOBufPrinter::printBin(bufQueuePtr_->front());
 }
 
-}
+} // namespace proxygen

@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <algorithm>
@@ -17,12 +16,16 @@
 #include <random>
 #include <vector>
 
-//#include <common/logging/logging.h>
+#include <folly/File.h>
 #include <folly/FileUtil.h>
+#include <folly/Format.h>
+#include <folly/Memory.h>
 #include <folly/Random.h>
 #include <folly/ThreadLocal.h>
+#include <folly/executors/GlobalExecutor.h>
 #include <folly/io/async/AsyncTimeout.h>
 #include <folly/io/async/EventBaseManager.h>
+#include <proxygen/httpserver/samples/hq/HQParams.h>
 #include <proxygen/httpserver/samples/hq/PartiallyReliableCurlClient.h>
 #include <proxygen/lib/http/session/HTTPTransaction.h>
 
@@ -33,12 +36,22 @@ using random_bytes_engine =
                                  CHAR_BIT,
                                  unsigned char>;
 
-class BaseQuicHandler : public proxygen::HTTPTransactionHandler {
- public:
-  explicit BaseQuicHandler(const std::string& version) : version_(version) {
-  }
+constexpr folly::StringPiece kPartiallyReliableScriptHeader{"x-pr-script"};
+constexpr folly::StringPiece kPartiallyReliableChunkDelayMsHeader{
+    "x-pr-chunk-delay-ms"};
+constexpr folly::StringPiece kPartiallyReliableChunkSizeHeader{
+    "x-pr-chunk-size"};
+constexpr folly::StringPiece kPartiallyReliableChunkDelayCapMsHeader{
+    "x-pr-chunk-delay-cap-ms"};
 
-  BaseQuicHandler() : version_("1.1") {
+const uint64_t kDefaultPartiallyReliableChunkSize = 16;
+const uint64_t kDefaultPartiallyReliableChunkDelayMs = 0;
+
+class BaseSampleHandler : public proxygen::HTTPTransactionHandler {
+ public:
+  BaseSampleHandler() = delete;
+
+  explicit BaseSampleHandler(const HQParams& params) : params_(params) {
   }
 
   void setTransaction(proxygen::HTTPTransaction* txn) noexcept override {
@@ -66,6 +79,16 @@ class BaseQuicHandler : public proxygen::HTTPTransactionHandler {
   }
 
   void onEgressResumed() noexcept override {
+  }
+
+  void maybeAddAltSvcHeader(proxygen::HTTPMessage& msg) const {
+    if (params_.protocol.empty() || params_.port == 0) {
+      return;
+    }
+    msg.getHeaders().add(
+        proxygen::HTTP_HEADER_ALT_SVC,
+        folly::format("{}=\":{}\"; ma=3600", params_.protocol, params_.port)
+            .str());
   }
 
   // clang-format off
@@ -107,33 +130,37 @@ class BaseQuicHandler : public proxygen::HTTPTransactionHandler {
   }
 
  protected:
-  proxygen::HTTPTransaction* txn_{nullptr};
-  std::string version_;
-};
-
-class EchoHandler : public BaseQuicHandler {
- public:
-  explicit EchoHandler(const std::string& version) : BaseQuicHandler(version) {
+  const std::string& getHttpVersion() const {
+    return params_.httpVersion.canonical;
   }
 
-  EchoHandler() = default;
+  proxygen::HTTPTransaction* txn_{nullptr};
+  const HQParams& params_;
+};
+
+class EchoHandler : public BaseSampleHandler {
+ public:
+  explicit EchoHandler(const HQParams& params) : BaseSampleHandler(params) {
+  }
+
+  EchoHandler() = delete;
 
   void onHeadersComplete(
       std::unique_ptr<proxygen::HTTPMessage> msg) noexcept override {
     VLOG(10) << "EchoHandler::onHeadersComplete";
     proxygen::HTTPMessage resp;
-    VLOG(10) << "Setting http-version to " << version_;
+    VLOG(10) << "Setting http-version to " << getHttpVersion();
     sendFooter_ =
         (msg->getHTTPVersion() == proxygen::HTTPMessage::kHTTPVersion09);
-    resp.setVersionString(version_);
+    resp.setVersionString(getHttpVersion());
     resp.setStatusCode(200);
     resp.setStatusMessage("Ok");
     msg->getHeaders().forEach(
         [&](const std::string& header, const std::string& val) {
           resp.getHeaders().add(folly::to<std::string>("x-echo-", header), val);
         });
-    resp.stripPerHopHeaders();
     resp.setWantsKeepalive(true);
+    maybeAddAltSvcHeader(resp);
     txn_->sendHeaders(resp);
   }
 
@@ -159,37 +186,8 @@ class EchoHandler : public BaseQuicHandler {
   bool sendFooter_{false};
 };
 
-/**
- * Streams ASCII cat in partially realible mode.
- */
-class PrCatHandler
-    : public EchoHandler
-    , public proxygen::HTTPTransactionTransportCallback
-    , public folly::AsyncTimeout {
- public:
-  explicit PrCatHandler(const std::string& version,
-                            folly::Optional<uint64_t> prChunkSize,
-                            folly::Optional<uint64_t> prChunkDelayMs)
-      : EchoHandler(version),
-        chunkSize_(prChunkSize),
-        chunkDelayMs_(prChunkDelayMs) {
-    if (!chunkSize_) {
-      chunkSize_ = 16;
-    }
-    if (!chunkDelayMs_) {
-      chunkDelayMs_ = 0;
-    }
-  }
-
-  PrCatHandler() = delete;
-
-  void setPrParams(folly::Optional<uint64_t> prChunkSize,
-                   folly::Optional<uint64_t> prChunkDelayMs) {
-    chunkSize_ = prChunkSize;
-    chunkDelayMs_ = prChunkDelayMs;
-  }
-
-  // HTTPTransactionTransportCallback
+class TransportCallbackBase
+    : public proxygen::HTTPTransactionTransportCallback {
   void firstHeaderByteFlushed() noexcept override {
   }
 
@@ -219,7 +217,31 @@ class PrCatHandler
 
   void bodyBytesReceived(size_t /* size */) noexcept override {
   }
+};
 
+/**
+ * Streams ASCII cat in partially realible mode.
+ */
+class PrCatHandler
+    : public EchoHandler
+    , public TransportCallbackBase
+    , public folly::AsyncTimeout {
+ public:
+  explicit PrCatHandler(const HQParams& params)
+      : EchoHandler(params),
+        chunkSize_(params.prChunkSize),
+        chunkDelayMs_(params.prChunkDelayMs) {
+  }
+
+  PrCatHandler() = delete;
+
+  void setPrParams(folly::Optional<uint64_t> prChunkSize,
+                   folly::Optional<uint64_t> prChunkDelayMs) {
+    chunkSize_ = prChunkSize;
+    chunkDelayMs_ = prChunkDelayMs;
+  }
+
+  // TransportCallbackBase
   void lastEgressHeaderByteAcked() noexcept override {
     attachEventBase(folly::EventBaseManager::get()->getEventBase());
     timeoutExpired();
@@ -229,15 +251,14 @@ class PrCatHandler
   }
 
   void onHeadersComplete(
-      std::unique_ptr<proxygen::HTTPMessage> msg) noexcept override {
+      std::unique_ptr<proxygen::HTTPMessage> /* msg */) noexcept override {
     VLOG(10) << "PrCatHandler::onHeadersComplete";
     proxygen::HTTPMessage resp;
-    VLOG(10) << "Setting http-version to " << version_;
-    resp.setVersionString(version_);
+    VLOG(10) << "Setting http-version to " << getHttpVersion();
+    resp.setVersionString(getHttpVersion());
     resp.setStatusCode(200);
     resp.setStatusMessage("Ok");
     resp.getHeaders().add("pr-chunk-size", folly::to<std::string>(*chunkSize_));
-    resp.stripPerHopHeaders();
     resp.setWantsKeepalive(true);
     resp.setPartiallyReliable();
     txn_->setTransportCallback(this);
@@ -245,20 +266,20 @@ class PrCatHandler
   }
 
   void onBodyPeek(uint64_t offset,
-                       const folly::IOBufQueue& chain) noexcept override {
-    LOG(INFO) << __func__ << ": got " << chain.chainLength()
+                  const folly::IOBuf& chain) noexcept override {
+    LOG(INFO) << __func__ << ": got " << chain.computeChainDataLength()
               << " bytes at offset " << offset;
   }
 
-  void onBodySkipped(uint64_t newOffset) noexcept override {
+  void onBodySkipped(uint64_t /* newOffset */) noexcept override {
     LOG(FATAL) << __func__ << ": wrong side to receive this callback ";
   }
 
   void onBodyRejected(uint64_t offset) noexcept override {
     cancelTimeout();
     LOG(INFO) << __func__ << ": data for chunk " << curPartNum_
-               << " (offset = " << offset << ") cancelled ( was scheduled with "
-               << delayMs_ << "ms delay)";
+              << " (offset = " << offset << ") cancelled ( was scheduled with "
+              << delayMs_ << "ms delay)";
 
     auto chunk = dataSndr_.generateChunk();
     CHECK(chunk);
@@ -266,7 +287,7 @@ class PrCatHandler
 
     if (eom) {
       LOG(INFO) << __func__ << ":    sending EOM after last chunk "
-                 << curPartNum_;
+                << curPartNum_;
       txn_->sendEOM();
     } else {
       curPartNum_ = offset / *chunkSize_;
@@ -294,57 +315,264 @@ class PrCatHandler
     curPartNum_++;
   }
 
-private:
+ private:
   uint64_t delayMs_{0};
   uint64_t curPartNum_{0};
-  folly::Optional<uint64_t> chunkSize_;
-  folly::Optional<uint64_t> chunkDelayMs_;
-  PartiallyReliableSender dataSndr_{*chunkSize_};
+  folly::Optional<uint64_t> chunkSize_{kDefaultPartiallyReliableChunkSize};
+  folly::Optional<uint64_t> chunkDelayMs_{
+      kDefaultPartiallyReliableChunkDelayMs};
+  PartiallyReliableSender dataSndr_{kDefaultPartiallyReliableChunkSize};
+};
+
+/**
+ * Sends body/skip sequence according to the script received in client headers.
+ */
+class PrSkipHandler
+    : public EchoHandler
+    , public folly::AsyncTimeout {
+ public:
+  explicit PrSkipHandler(const HQParams& params) : EchoHandler(params) {
+  }
+
+  PrSkipHandler() = delete;
+
+  void onEOM() noexcept override {
+  }
+
+  void onHeadersComplete(
+      std::unique_ptr<proxygen::HTTPMessage> msg) noexcept override {
+
+    msg->getHeaders().forEach(
+        [&](const std::string& header, const std::string& val) {
+          if (header == kPartiallyReliableScriptHeader) {
+            script = val;
+          } else if (header == kPartiallyReliableChunkDelayMsHeader) {
+            auto res = folly::tryTo<uint64_t>(val);
+            if (res.hasError()) {
+              LOG(ERROR) << __func__ << ": failed to convert " << header << " '"
+                         << val << "' to uint64_t";
+              txn_->sendAbort();
+            }
+            chunkDelayMs_ = *res;
+          }
+        });
+
+    proxygen::HTTPMessage resp;
+    resp.setVersionString(getHttpVersion());
+    resp.setStatusCode(200);
+    resp.setStatusMessage("Ok");
+    resp.setWantsKeepalive(true);
+    resp.setPartiallyReliable();
+    txn_->sendHeaders(resp);
+
+    if (script.length() == 0) {
+      txn_->sendEOM();
+    }
+  }
+
+  void onUnframedBodyStarted(uint64_t /* offset */) noexcept override {
+  }
+
+  void onBody(std::unique_ptr<folly::IOBuf> chain) noexcept override {
+    chunkSize_ = chain->computeChainDataLength();
+    if (chunkSize_ == 0) {
+      txn_->sendEOM();
+      return;
+    }
+
+    chunkData_ = std::move(chain);
+
+    attachEventBase(folly::EventBaseManager::get()->getEventBase());
+    timeoutExpired();
+  }
+
+  void timeoutExpired() noexcept override {
+    bool eom = (curPartNum_ == script.length() - 1);
+
+    if (script[curPartNum_] == 'b') {
+      LOG(INFO) << ": sending body part " << curPartNum_ << " with delay "
+                << delayMs_ << " ms";
+      txn_->sendBody(chunkData_->clone());
+    } else {
+      uint64_t nextOffset =
+          chunkData_->computeChainDataLength() * (curPartNum_ + 2);
+      auto res = txn_->skipBodyTo(nextOffset);
+      if (res.hasError()) {
+        LOG(ERROR) << __func__ << ": failed to skip body to offset "
+                   << nextOffset << ": " << getErrorCodeString(res.error());
+        txn_->sendAbort();
+        return;
+      } else {
+        LOG(INFO) << ": skipping body part " << curPartNum_ << " with delay "
+                  << delayMs_ << " ms";
+      }
+    }
+
+    if (eom) {
+      LOG(INFO) << __func__ << ":    sending EOM with chunk " << curPartNum_;
+      txn_->sendEOM();
+    } else {
+      delayMs_ = folly::Random::rand64(chunkDelayMs_);
+      scheduleTimeout(delayMs_);
+    }
+
+    curPartNum_++;
+  }
+
+ private:
+  uint64_t delayMs_{0};
+  uint64_t curPartNum_{0};
+
+  std::unique_ptr<folly::IOBuf> chunkData_{nullptr};
+  std::string script;
+  uint64_t chunkSize_{0};
+  uint64_t chunkDelayMs_{0};
+};
+
+/**
+ * Sends a body chunk, then waits for a reject from the client.
+ * Once reject arrives, sends another body chunk.
+ * Number of pieces/skips to send determined by the script received in client
+ * headers.
+ */
+class PrRejectHandler
+    : public EchoHandler
+    , public folly::AsyncTimeout {
+ public:
+  explicit PrRejectHandler(const HQParams& params) : EchoHandler(params) {
+  }
+
+  PrRejectHandler() = delete;
+
+  void onEOM() noexcept override {
+  }
+
+  void onHeadersComplete(
+      std::unique_ptr<proxygen::HTTPMessage> msg) noexcept override {
+
+    msg->getHeaders().forEach(
+        [&](const std::string& header, const std::string& val) {
+          if (header == kPartiallyReliableScriptHeader) {
+            script = val;
+          } else if (header == kPartiallyReliableChunkSizeHeader) {
+            auto res = folly::tryTo<uint64_t>(val);
+            if (res.hasError()) {
+              LOG(ERROR) << __func__ << ": failed to convert " << header << " '"
+                         << val << "' to uint64_t";
+              txn_->sendAbort();
+              return;
+            }
+            chunkSize_ = *res;
+          } else if (header == kPartiallyReliableChunkDelayCapMsHeader) {
+            auto res = folly::tryTo<uint64_t>(val);
+            if (res.hasError()) {
+              LOG(ERROR) << __func__ << ": failed to convert " << header << " '"
+                         << val << "' to uint64_t";
+              txn_->sendAbort();
+              return;
+            }
+            clientDelayCapMs_ = *res;
+          }
+        });
+
+    proxygen::HTTPMessage resp;
+    resp.setVersionString(getHttpVersion());
+    resp.setStatusCode(200);
+    resp.setStatusMessage("Ok");
+    resp.setWantsKeepalive(true);
+    resp.setPartiallyReliable();
+    txn_->sendHeaders(resp);
+
+    if (chunkSize_ == 0 || script.length() == 0) {
+      txn_->sendEOM();
+      return;
+    }
+
+    attachEventBase(folly::EventBaseManager::get()->getEventBase());
+    sendScriptedBody();
+  }
+
+  void sendScriptedBody() {
+    if (script.length() == 0) {
+      txn_->sendEOM();
+      return;
+    }
+
+    auto curStep = script[0];
+    script.erase(0, 1);
+
+    if (curStep == 'b') {
+      txn_->sendBody(folly::IOBuf::copyBuffer(std::string(chunkSize_, 'b')));
+      if (script.length() == 0) {
+        txn_->sendEOM();
+      } else {
+        scheduleTimeout(clientDelayCapMs_ / 3);
+      }
+    } else {
+      scheduleTimeout(clientDelayCapMs_ * 2);
+    }
+  }
+
+  void onBodyRejected(uint64_t /* offset */) noexcept override {
+    cancelTimeout();
+    sendScriptedBody();
+  }
+
+  void timeoutExpired() noexcept override {
+    sendScriptedBody();
+  }
+
+ private:
+  std::string script;
+  uint64_t chunkSize_{0};
+  uint64_t clientDelayCapMs_{0};
 };
 
 class ContinueHandler : public EchoHandler {
  public:
-  explicit ContinueHandler(const std::string& version) : EchoHandler(version) {
+  explicit ContinueHandler(const HQParams& params) : EchoHandler(params) {
   }
 
-  ContinueHandler() = default;
+  ContinueHandler() = delete;
 
   void onHeadersComplete(
       std::unique_ptr<proxygen::HTTPMessage> msg) noexcept override {
     VLOG(10) << "ContinueHandler::onHeadersComplete";
     proxygen::HTTPMessage resp;
-    VLOG(10) << "Setting http-version to " << version_;
-    resp.setVersionString(version_);
+    VLOG(10) << "Setting http-version to " << getHttpVersion();
+    resp.setVersionString(getHttpVersion());
     if (msg->getHeaders().getSingleOrEmpty(proxygen::HTTP_HEADER_EXPECT) ==
         "100-continue") {
       resp.setStatusCode(100);
       resp.setStatusMessage("Continue");
+      maybeAddAltSvcHeader(resp);
       txn_->sendHeaders(resp);
     }
     EchoHandler::onHeadersComplete(std::move(msg));
   }
 };
 
-class RandBytesGenHandler : public BaseQuicHandler {
+class RandBytesGenHandler : public BaseSampleHandler {
  public:
-  explicit RandBytesGenHandler(const std::string& version)
-      : BaseQuicHandler(version) {
+  explicit RandBytesGenHandler(const HQParams& params)
+      : BaseSampleHandler(params) {
   }
 
-  RandBytesGenHandler() = default;
+  RandBytesGenHandler() = delete;
 
   void onHeadersComplete(
       std::unique_ptr<proxygen::HTTPMessage> msg) noexcept override {
+    auto path = msg->getPathAsStringPiece();
     VLOG(10) << "RandBytesGenHandler::onHeadersComplete";
-    VLOG(1) << "Request path: " << msg->getPath();
-    CHECK(msg->getPath().size() > 1);
+    VLOG(1) << "Request path: " << path;
+    CHECK_GE(path.size(), 1);
     try {
-      respBodyLen_ = folly::to<uint64_t>(msg->getPath().substr(1));
-    } catch (const folly::ConversionError& ex) {
+      respBodyLen_ = folly::to<uint64_t>(path.subpiece(1));
+    } catch (const folly::ConversionError&) {
       auto errorMsg = folly::to<std::string>(
           "Invalid URL: cannot extract requested response-length from url "
           "path: ",
-          msg->getPath());
+          path);
       LOG(ERROR) << errorMsg;
       sendError(errorMsg);
       return;
@@ -355,10 +583,11 @@ class RandBytesGenHandler : public BaseQuicHandler {
     }
 
     proxygen::HTTPMessage resp;
-    VLOG(10) << "Setting http-version to " << version_;
-    resp.setVersionString(version_);
+    VLOG(10) << "Setting http-version to " << getHttpVersion();
+    resp.setVersionString(getHttpVersion());
     resp.setStatusCode(200);
     resp.setStatusMessage("Ok");
+    maybeAddAltSvcHeader(resp);
     txn_->sendHeaders(resp);
     if (msg->getMethod() == proxygen::HTTPMethod::GET) {
       sendBodyInChunks();
@@ -390,6 +619,11 @@ class RandBytesGenHandler : public BaseQuicHandler {
 
  private:
   void sendBodyInChunks() {
+    if (error_) {
+      LOG(ERROR) << "sendBodyInChunks no-op, error_=true";
+      txn_->sendAbort();
+      return;
+    }
     uint64_t iter = respBodyLen_ / kMaxChunkSize;
     if (respBodyLen_ % kMaxChunkSize != 0) {
       ++iter;
@@ -431,38 +665,41 @@ class RandBytesGenHandler : public BaseQuicHandler {
     proxygen::HTTPMessage resp;
     resp.setStatusCode(400);
     resp.setStatusMessage("Bad Request");
-    resp.stripPerHopHeaders();
     resp.setWantsKeepalive(true);
+    maybeAddAltSvcHeader(resp);
     txn_->sendHeaders(resp);
     txn_->sendBody(folly::IOBuf::copyBuffer(errorMsg));
+    txn_->sendEOM();
+    error_ = true;
   }
 
-  const uint64_t kMaxAllowedLength{10 * 1024 * 1024}; // 10 MB
-  const uint64_t kMaxChunkSize{100 * 1024};           // 100 KB
-  const std::string kErrorMsg =
-      folly::to<std::string>("More than 10 MB of data requested. ",
-                             "Please request for smaller size.");
+  const uint64_t kMaxAllowedLength{1ULL * 1024 * 1024 * 1024}; // 1 GB
+  const uint64_t kMaxChunkSize{100ULL * 1024};                 // 100 KB
+  const std::string kErrorMsg = folly::to<std::string>(
+      "More than 1GB of data requested. ", "Please request for smaller size.");
   uint64_t respBodyLen_;
   bool paused_{false};
   bool eomSent_{false};
+  bool error_{false};
 };
 
-class DummyHandler : public BaseQuicHandler {
+class DummyHandler : public BaseSampleHandler {
  public:
-  explicit DummyHandler(const std::string& version) : BaseQuicHandler(version) {
+  explicit DummyHandler(const HQParams& params) : BaseSampleHandler(params) {
   }
 
-  DummyHandler() = default;
+  DummyHandler() = delete;
 
   void onHeadersComplete(
       std::unique_ptr<proxygen::HTTPMessage> msg) noexcept override {
     VLOG(10) << "DummyHandler::onHeadersComplete";
     proxygen::HTTPMessage resp;
-    resp.setVersionString(version_);
+    VLOG(10) << "Setting http-version to " << getHttpVersion();
+    resp.setVersionString(getHttpVersion());
     resp.setStatusCode(200);
     resp.setStatusMessage("Ok");
-    resp.stripPerHopHeaders();
     resp.setWantsKeepalive(true);
+    maybeAddAltSvcHeader(resp);
     txn_->sendHeaders(resp);
     if (msg->getMethod() == proxygen::HTTPMethod::GET) {
       txn_->sendBody(folly::IOBuf::copyBuffer(kDummyMessage));
@@ -491,22 +728,27 @@ class DummyHandler : public BaseQuicHandler {
                              "response with random bytes");
 };
 
-class HealthCheckHandler : public BaseQuicHandler {
+class HealthCheckHandler : public BaseSampleHandler {
  public:
-  HealthCheckHandler(bool healthy, const std::string& version)
-      : BaseQuicHandler(version), healthy_(healthy) {
+  HealthCheckHandler(bool healthy, const HQParams& params)
+      : BaseSampleHandler(params), healthy_(healthy) {
   }
 
   void onHeadersComplete(
       std::unique_ptr<proxygen::HTTPMessage> msg) noexcept override {
     VLOG(10) << "HealthCheckHandler::onHeadersComplete";
-    assert(msg->getMethod() == proxygen::HTTPMethod::GET);
     proxygen::HTTPMessage resp;
-    resp.setVersionString(version_);
-    resp.setStatusCode(healthy_ ? 200 : 400);
-    resp.setStatusMessage(healthy_ ? "Ok" : "Not Found");
-    resp.stripPerHopHeaders();
+    VLOG(10) << "Setting http-version to " << getHttpVersion();
+    resp.setVersionString(getHttpVersion());
+    if (msg->getMethod() == proxygen::HTTPMethod::GET) {
+      resp.setStatusCode(healthy_ ? 200 : 400);
+      resp.setStatusMessage(healthy_ ? "Ok" : "Not Found");
+    } else {
+      resp.setStatusCode(405);
+      resp.setStatusMessage("Method not allowed");
+    }
     resp.setWantsKeepalive(true);
+    maybeAddAltSvcHeader(resp);
     txn_->sendHeaders(resp);
 
     txn_->sendBody(
@@ -531,10 +773,10 @@ class HealthCheckHandler : public BaseQuicHandler {
   bool healthy_;
 };
 
-class WaitReleaseHandler : public BaseQuicHandler {
+class WaitReleaseHandler : public BaseSampleHandler {
  public:
-  WaitReleaseHandler(folly::EventBase* evb, const std::string& version)
-      : BaseQuicHandler(version), evb_(evb) {
+  WaitReleaseHandler(folly::EventBase* evb, const HQParams& params)
+      : BaseSampleHandler(params), evb_(evb) {
   }
 
   void onHeadersComplete(
@@ -542,10 +784,12 @@ class WaitReleaseHandler : public BaseQuicHandler {
 
   void sendErrorResponse(const std::string& body) {
     proxygen::HTTPMessage resp;
-    resp.setVersionString(version_);
+    VLOG(10) << "Setting http-version to " << getHttpVersion();
+    resp.setVersionString(getHttpVersion());
     resp.setStatusCode(400);
     resp.setStatusMessage("ERROR");
     resp.setWantsKeepalive(false);
+    maybeAddAltSvcHeader(resp);
     txn_->sendHeaders(resp);
     txn_->sendBody(folly::IOBuf::copyBuffer(body));
     txn_->sendEOM();
@@ -553,11 +797,13 @@ class WaitReleaseHandler : public BaseQuicHandler {
 
   void sendOkResponse(const std::string& body, bool eom) {
     proxygen::HTTPMessage resp;
-    resp.setVersionString(version_);
+    VLOG(10) << "Setting http-version to " << getHttpVersion();
+    resp.setVersionString(getHttpVersion());
     resp.setStatusCode(200);
     resp.setStatusMessage("OK");
     resp.setWantsKeepalive(true);
     resp.setIsChunked(true);
+    maybeAddAltSvcHeader(resp);
     txn_->sendHeaders(resp);
     txn_->sendBody(folly::IOBuf::copyBuffer(body));
     if (eom) {
@@ -601,7 +847,7 @@ namespace {
 constexpr auto kPushFileName = "pusheen.txt";
 };
 
-class ServerPushHandler : public BaseQuicHandler {
+class ServerPushHandler : public BaseSampleHandler {
   class ServerPushTxnHandler : public proxygen::HTTPPushTransactionHandler {
     void setTransaction(
         proxygen::HTTPTransaction* /* txn */) noexcept override {
@@ -610,7 +856,7 @@ class ServerPushHandler : public BaseQuicHandler {
     void detachTransaction() noexcept override {
     }
 
-    void onError(const proxygen::HTTPException& /* error */) noexcept override {
+    void onError(const proxygen::HTTPException& /* err */) noexcept override {
     }
 
     void onEgressPaused() noexcept override {
@@ -621,7 +867,9 @@ class ServerPushHandler : public BaseQuicHandler {
   };
 
  public:
-  explicit ServerPushHandler(const std::string& version);
+  explicit ServerPushHandler(const HQParams& params)
+      : BaseSampleHandler(params) {
+  }
 
   void onHeadersComplete(
       std::unique_ptr<proxygen::HTTPMessage> /* msg */) noexcept override;
@@ -650,6 +898,120 @@ class ServerPushHandler : public BaseQuicHandler {
 
   std::string path_;
   ServerPushTxnHandler pushTxnHandler_;
+};
+
+class StaticFileHandler : public BaseSampleHandler {
+ public:
+  explicit StaticFileHandler(const HQParams& params)
+      : BaseSampleHandler(params), staticRoot_(params.staticRoot) {
+  }
+
+  void onHeadersComplete(
+      std::unique_ptr<proxygen::HTTPMessage> msg) noexcept override {
+    auto path = msg->getPathAsStringPiece();
+    VLOG(10) << "StaticFileHandler::onHeadersComplete";
+    VLOG(4) << "Request path: " << path;
+    if (path.contains("..")) {
+      sendError("Path cannot contain ..");
+      return;
+    }
+    try {
+      // Strip /static/ and join with /.
+      file_ = std::make_unique<folly::File>(
+          folly::to<std::string>(staticRoot_, "/", path));
+    } catch (const std::system_error&) {
+      auto errorMsg = folly::to<std::string>(
+          "Invalid URL: cannot open requested file. "
+          "path: ",
+          path);
+      LOG(ERROR) << errorMsg;
+      sendError(errorMsg);
+      return;
+    }
+    proxygen::HTTPMessage resp;
+    VLOG(10) << "Setting http-version to " << getHttpVersion();
+    resp.setVersionString(getHttpVersion());
+    resp.setStatusCode(200);
+    resp.setStatusMessage("Ok");
+    maybeAddAltSvcHeader(resp);
+    txn_->sendHeaders(resp);
+    // use a CPU executor since read(2) of a file can block
+    folly::getCPUExecutor()->add(
+        std::bind(&StaticFileHandler::readFile,
+                  this,
+                  folly::EventBaseManager::get()->getEventBase()));
+  }
+
+  void onBody(std::unique_ptr<folly::IOBuf> /*chain*/) noexcept override {
+  }
+
+  void onEOM() noexcept override {
+  }
+
+  void onError(const proxygen::HTTPException& /*error*/) noexcept override {
+    VLOG(10) << "StaticFileHandler::onError";
+    txn_->sendAbort();
+  }
+
+  void onEgressPaused() noexcept override {
+    VLOG(10) << "StaticFileHandler::onEgressPaused";
+    paused_ = true;
+  }
+
+  void onEgressResumed() noexcept override {
+    VLOG(10) << "StaticFileHandler::onEgressResumed";
+    paused_ = false;
+    folly::getCPUExecutor()->add(
+        std::bind(&StaticFileHandler::readFile,
+                  this,
+                  folly::EventBaseManager::get()->getEventBase()));
+  }
+
+ private:
+  void readFile(folly::EventBase* evb) {
+    folly::IOBufQueue buf;
+    while (file_ && !paused_) {
+      // read 4k-ish chunks and foward each one to the client
+      auto data = buf.preallocate(4096, 4096);
+      auto rc = folly::readNoInt(file_->fd(), data.first, data.second);
+      if (rc < 0) {
+        // error
+        VLOG(4) << "Read error=" << rc;
+        file_.reset();
+        evb->runInEventBaseThread([this] {
+          LOG(ERROR) << "Error reading file";
+          txn_->sendAbort();
+        });
+        break;
+      } else if (rc == 0) {
+        // done
+        file_.reset();
+        VLOG(4) << "Read EOF";
+        evb->runInEventBaseThread([this] { txn_->sendEOM(); });
+        break;
+      } else {
+        buf.postallocate(rc);
+        evb->runInEventBaseThread([this, body = buf.move()]() mutable {
+          txn_->sendBody(std::move(body));
+        });
+      }
+    }
+  }
+
+  void sendError(const std::string& errorMsg) {
+    proxygen::HTTPMessage resp;
+    resp.setStatusCode(400);
+    resp.setStatusMessage("Bad Request");
+    resp.setWantsKeepalive(true);
+    maybeAddAltSvcHeader(resp);
+    txn_->sendHeaders(resp);
+    txn_->sendBody(folly::IOBuf::copyBuffer(errorMsg));
+    txn_->sendEOM();
+  }
+
+  std::unique_ptr<folly::File> file_;
+  std::atomic<bool> paused_{false};
+  const std::string staticRoot_;
 };
 
 }} // namespace quic::samples

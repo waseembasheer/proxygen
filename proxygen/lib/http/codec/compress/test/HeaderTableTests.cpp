@@ -1,21 +1,19 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <folly/portability/GTest.h>
 #include <memory>
 #include <proxygen/lib/http/codec/compress/HeaderTable.h>
-#include <proxygen/lib/http/codec/compress/QPACKHeaderTable.h>
 #include <proxygen/lib/http/codec/compress/Logging.h>
+#include <proxygen/lib/http/codec/compress/QPACKHeaderTable.h>
 #include <sstream>
 
 using namespace std;
-using namespace testing;
 
 namespace proxygen {
 
@@ -33,9 +31,10 @@ class HeaderTableTests : public testing::Test {
     EXPECT_LE(table.size(), newMax);
   }
 
-  void resizeAndFillTable(
-      HeaderTable& table, HPACKHeader& header, uint32_t newMax,
-      uint32_t fillCount) {
+  void resizeAndFillTable(HeaderTable& table,
+                          HPACKHeader& header,
+                          uint32_t newMax,
+                          uint32_t fillCount) {
     uint32_t newCapacity = header.bytes() * newMax;
     resizeTable(table, newCapacity, newMax);
     // Fill the table (with one extra) and make sure we haven't violated our
@@ -160,8 +159,7 @@ TEST_F(HeaderTableTests, Print) {
   HeaderTable t(128);
   t.add(HPACKHeader("Accept-Encoding", "gzip"));
   out << t;
-  EXPECT_EQ(out.str(),
-  "\n[1] (s=51) accept-encoding: gzip\ntotal size: 51\n");
+  EXPECT_EQ(out.str(), "\n[1] (s=51) accept-encoding: gzip\ntotal size: 51\n");
 }
 
 TEST_F(HeaderTableTests, IncreaseCapacity) {
@@ -186,7 +184,6 @@ TEST_F(HeaderTableTests, IncreaseCapacity) {
   EXPECT_LE(table.length(), table.getMaxTableLength(capacity));
   // external index didn't change
   EXPECT_EQ(table.getIndex(accept), 1);
-
 }
 
 TEST_F(HeaderTableTests, VaryCapacity) {
@@ -269,9 +266,9 @@ TEST_F(HeaderTableTests, AddLargerThanTable) {
   uint32_t capacityBytes = 256;
   HeaderTable table(capacityBytes);
   HPACKHeaderName name("accept-encoding");
-  table.add(HPACKHeader("accept-encoding", "gzip"));  // internal index = 0
-  table.add(HPACKHeader("accept-encoding", "gzip"));  // internal index = 1
-  table.add(HPACKHeader("test-encoding", "gzip"));    // internal index = 2
+  table.add(HPACKHeader("accept-encoding", "gzip")); // internal index = 0
+  table.add(HPACKHeader("accept-encoding", "gzip")); // internal index = 1
+  table.add(HPACKHeader("test-encoding", "gzip"));   // internal index = 2
   EXPECT_EQ(table.names().size(), 2);
 
   // Attempt to add a header that is larger than our specified table capacity
@@ -280,9 +277,9 @@ TEST_F(HeaderTableTests, AddLargerThanTable) {
   EXPECT_EQ(table.names().size(), 0);
 
   // Add the previous headers to the table again
-  table.add(HPACKHeader("accept-encoding", "gzip"));  // internal index = 3
-  table.add(HPACKHeader("accept-encoding", "gzip"));  // internal index = 4
-  table.add(HPACKHeader("test-encoding", "gzip"));    // internal index = 5
+  table.add(HPACKHeader("accept-encoding", "gzip")); // internal index = 3
+  table.add(HPACKHeader("accept-encoding", "gzip")); // internal index = 4
+  table.add(HPACKHeader("test-encoding", "gzip"));   // internal index = 5
   EXPECT_EQ(table.names().size(), 2);
 
   EXPECT_EQ(table.hasName(name), true);
@@ -332,4 +329,4 @@ TEST_F(HeaderTableTests, SmallTable) {
   EXPECT_EQ(table.length(), 2);
 }
 
-}
+} // namespace proxygen

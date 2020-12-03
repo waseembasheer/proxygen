@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/httpserver/RequestHandler.h>
@@ -26,10 +25,11 @@ namespace proxygen {
  *
  * The default implementation just lets everything pass through.
  */
-class Filter : public RequestHandler, public ResponseHandler {
+class Filter
+    : public RequestHandler
+    , public ResponseHandler {
  public:
-  explicit Filter(RequestHandler* upstream)
-      : ResponseHandler(upstream) {
+  explicit Filter(RequestHandler* upstream) : ResponseHandler(upstream) {
   }
 
   // Request handler
@@ -66,6 +66,10 @@ class Filter : public RequestHandler, public ResponseHandler {
     downstream_ = nullptr;
     upstream_->onError(err);
     delete this;
+  }
+
+  void onGoaway(ErrorCode code) noexcept override {
+    upstream_->onGoaway(code);
   }
 
   void onEgressPaused() noexcept override {
@@ -121,13 +125,13 @@ class Filter : public RequestHandler, public ResponseHandler {
     downstream_->resumeIngress();
   }
 
-  ResponseHandler* newPushedResponse(PushHandler* handler) noexcept override {
+  folly::Expected<ResponseHandler*, ProxygenError> newPushedResponse(
+      PushHandler* handler) noexcept override {
     return downstream_->newPushedResponse(handler);
   }
 
-  ResponseHandler* newExMessage(
-      ExMessageHandler* exHandler,
-      bool unidirectional) noexcept override {
+  ResponseHandler* newExMessage(ExMessageHandler* exHandler,
+                                bool unidirectional) noexcept override {
     return downstream_->newExMessage(exHandler, unidirectional);
   }
 
@@ -138,7 +142,6 @@ class Filter : public RequestHandler, public ResponseHandler {
   void getCurrentTransportInfo(wangle::TransportInfo* tinfo) const override {
     downstream_->getCurrentTransportInfo(tinfo);
   }
-
 };
 
-}
+} // namespace proxygen

@@ -1,14 +1,14 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
+#include <folly/Expected.h>
 #include <proxygen/lib/http/session/HTTPTransaction.h>
 
 namespace proxygen {
@@ -47,7 +47,8 @@ class ResponseHandler {
       : upstream_(CHECK_NOTNULL(upstream)) {
   }
 
-  virtual ~ResponseHandler() {}
+  virtual ~ResponseHandler() {
+  }
 
   /**
    * NOTE: We take response message as non-const reference, to allow filters
@@ -74,13 +75,14 @@ class ResponseHandler {
 
   virtual void resumeIngress() noexcept = 0;
 
-  virtual ResponseHandler* newPushedResponse(
-    PushHandler* pushHandler) noexcept = 0;
+  virtual folly::Expected<ResponseHandler*, ProxygenError> newPushedResponse(
+      PushHandler* pushHandler) noexcept = 0;
 
-  virtual ResponseHandler* newExMessage(ExMessageHandler* /*exHandler*/,
-                                        bool /*unidirectional*/ = false)
-      noexcept {
+  virtual ResponseHandler* newExMessage(
+      ExMessageHandler* /*exHandler*/,
+      bool /*unidirectional*/ = false) noexcept {
     LOG(FATAL) << "newExMessage not supported";
+    folly::assume_unreachable();
   }
 
   // Accessors for Transport/Connection information
@@ -98,4 +100,4 @@ class ResponseHandler {
   HTTPTransaction* txn_{nullptr};
 };
 
-}
+} // namespace proxygen

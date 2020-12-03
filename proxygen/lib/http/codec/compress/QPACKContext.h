@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/lib/http/codec/compress/HPACKConstants.h>
@@ -18,12 +17,15 @@ namespace proxygen {
 class QPACKContext {
  public:
   QPACKContext(uint32_t tableSize, bool trackReferences);
-  ~QPACKContext() {}
+  ~QPACKContext() {
+  }
 
   /**
    * @return header at the given index by composing dynamic and static tables
    */
-  const HPACKHeader& getHeader(bool isStatic, uint32_t index, uint32_t base,
+  const HPACKHeader& getHeader(bool isStatic,
+                               uint32_t index,
+                               uint32_t base,
                                bool aboveBase);
 
   const QPACKHeaderTable& getTable() const {
@@ -42,6 +44,22 @@ class QPACKContext {
     return table_.size();
   }
 
+  uint32_t getInsertCount() const {
+    return table_.getInsertCount();
+  }
+
+  uint32_t getBlockedInserts() const {
+    return blockedInsertions_;
+  }
+
+  uint32_t getDuplications() const {
+    return duplications_;
+  }
+
+  uint32_t getStaticRefs() const {
+    return staticRefs_;
+  }
+
   void seedHeaderTable(std::vector<HPACKHeader>& headers);
 
   void describe(std::ostream& os) const;
@@ -56,8 +74,11 @@ class QPACKContext {
   }
 
   QPACKHeaderTable table_;
+  uint32_t blockedInsertions_{0};
+  uint32_t duplications_{0};
+  uint32_t staticRefs_{0};
 };
 
 std::ostream& operator<<(std::ostream& os, const QPACKContext& context);
 
-}
+} // namespace proxygen

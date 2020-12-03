@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/FBString.h>
@@ -20,23 +19,22 @@ namespace proxygen {
 class HPACKEncodeBuffer {
 
  public:
-  HPACKEncodeBuffer(
-    uint32_t growthSize,
-    bool huffmanEnabled);
+  HPACKEncodeBuffer(uint32_t growthSize, bool huffmanEnabled);
 
   explicit HPACKEncodeBuffer(uint32_t growthSize);
 
-  ~HPACKEncodeBuffer() {}
+  ~HPACKEncodeBuffer() {
+  }
 
   /**
    * transfer ownership of the underlying IOBuf's
    */
   std::unique_ptr<folly::IOBuf> release() {
-    return bufQueue_.move();
+    return bufQueuePtr_->move();
   }
 
   void clear() {
-    bufQueue_.clear();
+    bufQueuePtr_->clear();
   }
 
   /**
@@ -80,7 +78,8 @@ class HPACKEncodeBuffer {
    *
    * @return bytes used for encoding
    */
-  uint32_t encodeLiteral(uint8_t instruction, uint8_t nbit,
+  uint32_t encodeLiteral(uint8_t instruction,
+                         uint8_t nbit,
                          folly::StringPiece literal);
 
   /**
@@ -92,7 +91,8 @@ class HPACKEncodeBuffer {
    * encodes a string using huffman encoding QPACK style, where
    * literal length has an nbit prefix.
    */
-  uint32_t encodeHuffman(uint8_t instruction, uint8_t nbit,
+  uint32_t encodeHuffman(uint8_t instruction,
+                         uint8_t nbit,
                          folly::StringPiece literal);
 
   /**
@@ -100,17 +100,26 @@ class HPACKEncodeBuffer {
    */
   std::string toBin();
 
- private:
+  void setWriteBuf(folly::IOBufQueue* writeBuf) {
+    if (writeBuf) {
+      bufQueuePtr_ = writeBuf;
+    } else {
+      bufQueuePtr_ = &bufQueue_;
+    }
+    buf_.reset(bufQueuePtr_, growthSize_);
+  }
 
+ private:
   /**
    * append one byte at the end of buffer ensuring we always have enough space
    */
   void append(uint8_t byte);
 
   folly::IOBufQueue bufQueue_;
+  folly::IOBufQueue* bufQueuePtr_{&bufQueue_};
   folly::io::QueueAppender buf_;
   uint32_t growthSize_;
   bool huffmanEnabled_;
 };
 
-}
+} // namespace proxygen

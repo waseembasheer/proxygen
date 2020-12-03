@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/lib/http/HTTPHeaders.h>
@@ -23,18 +22,16 @@ struct Header {
   const std::string* name;
   const std::string* value;
 
-  Header(HTTPHeaderCode c,
-         const std::string& v)
-    : code(c), name(HTTPCommonHeaders::getPointerToHeaderName(c)), value(&v) {}
+  Header(HTTPHeaderCode c, const std::string& v)
+      : code(c), name(HTTPCommonHeaders::getPointerToName(c)), value(&v) {
+  }
 
-  Header(HTTPHeaderCode c,
-         const std::string& n,
-         const std::string& v)
-    : code(c), name(&n), value(&v) {}
+  Header(HTTPHeaderCode c, const std::string& n, const std::string& v)
+      : code(c), name(&n), value(&v) {
+  }
 
   bool operator<(const Header& h) const {
-    return (code < h.code) ||
-      ((code == h.code) && (*name < *h.name));
+    return (code < h.code) || ((code == h.code) && (*name < *h.name));
   }
 
   // For use by tests
@@ -47,7 +44,8 @@ struct Header {
   // This is because in prod the common header code is likely already known and
   // an above constructor could be used; this exists for test purposes
   Header(const std::string& n, const std::string& v)
-    : code(HTTPCommonHeaders::hash(n)), name(&n), value(&v) {}
+      : code(HTTPCommonHeaders::hash(n)), name(&n), value(&v) {
+  }
 };
 
-}}
+}} // namespace proxygen::compress

@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include "proxygen/lib/http/connpool/test/SessionPoolTestFixture.h"
 
 #include "proxygen/lib/http/connpool/ServerIdleSessionController.h"
@@ -15,6 +14,8 @@
 #include "proxygen/lib/http/connpool/ThreadIdleSessionController.h"
 
 #include <folly/io/async/EventBaseManager.h>
+#include <folly/portability/GFlags.h>
+#include <folly/synchronization/Baton.h>
 #include <wangle/acceptor/ConnectionManager.h>
 
 using namespace proxygen;
@@ -535,11 +536,12 @@ TEST_F(SessionPoolFixture, MoveIdleSessionBetweenThreadsTest) {
   t2InitBaton.wait();
   // Simulate thread2 asking thread1 for an idle session
   evb2.runInEventBaseThread([&] {
-    ctrl.getIdleSession().then(&evb2, [&](HTTPSessionBase* idleSession) {
-      ASSERT_EQ(idleSession, session);
-      // Not re-attaching it to thread2 so ctrl will be empty
-      transferBaton.post();
-    });
+    ctrl.getIdleSession().via(&evb2).thenValue(
+        [&](HTTPSessionBase* idleSession) {
+          ASSERT_EQ(idleSession, session);
+          // Not re-attaching it to thread2 so ctrl will be empty
+          transferBaton.post();
+        });
   });
   transferBaton.wait();
   EXPECT_EQ(ctrl.popBestIdlePool(), nullptr);

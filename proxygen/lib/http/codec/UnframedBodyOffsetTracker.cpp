@@ -1,12 +1,12 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
+#include <ostream>
 #include <string>
 
 #include <proxygen/lib/http/codec/UnframedBodyOffsetTracker.h>
@@ -20,12 +20,11 @@ UnframedBodyOffsetTracker::startBodyTracking(uint64_t streamOffset) {
         UnframedBodyOffsetTrackerError::START_OFFSET_ALREADY_SET);
   }
   bodyStartstreamOffset_ = streamOffset;
-  return folly::makeExpected<UnframedBodyOffsetTrackerError>(
-      folly::Unit());
+  return folly::makeExpected<UnframedBodyOffsetTrackerError>(folly::Unit());
 }
 
 bool UnframedBodyOffsetTracker::bodyStarted() const {
-  return bodyStartstreamOffset_.hasValue();
+  return bodyStartstreamOffset_.has_value();
 }
 
 void UnframedBodyOffsetTracker::addBodyBytesProcessed(uint64_t n) {
@@ -46,8 +45,8 @@ uint64_t UnframedBodyOffsetTracker::getBodyBytesProcessed() const {
   return appBodyBytesProcessed_;
 }
 
-TrackerOffsetResult
-UnframedBodyOffsetTracker::getBodyStreamStartOffset() const {
+TrackerOffsetResult UnframedBodyOffsetTracker::getBodyStreamStartOffset()
+    const {
   if (!bodyStartstreamOffset_) {
     return folly::makeUnexpected(
         UnframedBodyOffsetTrackerError::START_OFFSET_NOT_SET);
@@ -93,8 +92,8 @@ std::string toString(UnframedBodyOffsetTrackerError error) {
   return "Unknown error";
 }
 
-std::ostream& operator<<(
-    std::ostream& os, const UnframedBodyOffsetTrackerError& error) {
+std::ostream& operator<<(std::ostream& os,
+                         const UnframedBodyOffsetTrackerError& error) {
   os << toString(error);
   return os;
 }

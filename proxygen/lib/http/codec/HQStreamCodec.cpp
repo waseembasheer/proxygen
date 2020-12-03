@@ -1,15 +1,15 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/HQStreamCodec.h>
 #include <folly/Format.h>
 #include <folly/ScopeGuard.h>
+#include <folly/SingletonThreadLocal.h>
 #include <folly/io/Cursor.h>
 #include <proxygen/lib/http/HTTP3ErrorCode.h>
 #include <proxygen/lib/http/codec/HQUtils.h>
@@ -52,7 +52,6 @@ ParseResult HQStreamCodec::checkFrameAllowed(FrameType type) {
     case hq::FrameType::SETTINGS:
     case hq::FrameType::GOAWAY:
     case hq::FrameType::MAX_PUSH_ID:
-    case hq::FrameType::PRIORITY:
     case hq::FrameType::CANCEL_PUSH:
       return HTTP3::ErrorCode::HTTP_WRONG_STREAM;
     case hq::FrameType::PUSH_PROMISE:
@@ -141,7 +140,7 @@ ParseResult HQStreamCodec::parseHeaders(Cursor& cursor,
     if (callback_) {
       HTTPException ex(HTTPException::Direction::INGRESS_AND_EGRESS,
                        "Invalid HEADERS frame");
-      ex.setErrno(uint32_t(HTTP3::ErrorCode::HTTP_UNEXPECTED_FRAME));
+      ex.setErrno(uint32_t(HTTP3::ErrorCode::HTTP_FRAME_UNEXPECTED));
       callback_->onError(streamId_, ex, false);
     }
     setParserPaused(true);
@@ -201,10 +200,10 @@ ParseResult HQStreamCodec::parsePushPromise(Cursor& cursor,
   return res;
 }
 
-void HQStreamCodec::onHeader(const folly::fbstring& name,
+void HQStreamCodec::onHeader(const HPACKHeaderName& name,
                              const folly::fbstring& value) {
   if (decodeInfo_.onHeader(name, value)) {
-    if (name == "user-agent" && userAgent_.empty()) {
+    if (userAgent_.empty() && name.getHeaderCode() == HTTP_HEADER_USER_AGENT) {
       userAgent_ = value.toStdString();
     }
   } else {
@@ -464,8 +463,6 @@ void HQStreamCodec::generateHeader(folly::IOBufQueue& writeBuf,
   egressPartiallyReliable_ =
       egressPartiallyReliable_ || msg.isPartiallyReliable();
 
-
-
   generateHeaderImpl(writeBuf, msg, folly::none, size);
 
   // For requests, set final header seen flag right away.
@@ -509,10 +506,8 @@ void HQStreamCodec::generateHeaderImpl(folly::IOBufQueue& writeBuf,
                                        const HTTPMessage& msg,
                                        folly::Optional<StreamID> pushId,
                                        HTTPHeaderSize* size) {
-  std::vector<std::string> temps;
-  auto allHeaders = CodecUtil::prepareMessageForCompression(msg, temps);
-  auto result =
-      headerCodec_.encode(allHeaders, streamId_, maxEncoderStreamData());
+  auto result = headerCodec_.encodeHTTP(
+      qpackEncoderWriteBuf_, msg, true, streamId_, maxEncoderStreamData());
   if (size) {
     *size = headerCodec_.getEncodedSize();
   }
@@ -536,17 +531,13 @@ void HQStreamCodec::generateHeaderImpl(folly::IOBufQueue& writeBuf,
   // HTTP2/2 serializes priority here, but HQ priorities need to go on the
   // control stream
 
-  if (result.control) {
-    qpackEncoderWriteBuf_.append(std::move(result.control));
-  }
-
   WriteResult res;
   if (pushId) {
     CHECK(!egressPartiallyReliable_)
         << ": push promise not allowed on partially reliable message";
-    res = hq::writePushPromise(writeBuf, *pushId, std::move(result.stream));
+    res = hq::writePushPromise(writeBuf, *pushId, std::move(result));
   } else {
-    res = hq::writeHeaders(writeBuf, std::move(result.stream));
+    res = hq::writeHeaders(writeBuf, std::move(result));
   }
 
   if (res.hasValue()) {
@@ -558,7 +549,7 @@ void HQStreamCodec::generateHeaderImpl(folly::IOBufQueue& writeBuf,
 }
 
 size_t HQStreamCodec::generateBodyImpl(folly::IOBufQueue& writeBuf,
-                                   std::unique_ptr<folly::IOBuf> chain) {
+                                       std::unique_ptr<folly::IOBuf> chain) {
   auto result = hq::writeData(writeBuf, std::move(chain));
   if (result) {
     return *result;

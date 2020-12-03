@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <cstdint>
@@ -52,9 +51,8 @@ enum class SettingsId : uint64_t {
   //_HQ_HEADER_TABLE_SIZE = HQ_SETTINGS_MASK | 1, -- use HEADER_TABLE_SIZE
   //_HQ_MAX_HEADER_LIST_SIZE = HQ_SETTINGS_MASK | 6, -- use MAX_HEADER_LIST_SIZE
   _HQ_QPACK_BLOCKED_STREAMS = HQ_SETTINGS_MASK | 7,
-  _HQ_NUM_PLACEHOLDERS = HQ_SETTINGS_MASK | 8,
 };
 
 using SettingPair = std::pair<SettingsId, uint32_t>;
 
-}
+} // namespace proxygen

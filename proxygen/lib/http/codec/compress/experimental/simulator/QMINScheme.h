@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <assert.h>
@@ -18,9 +17,9 @@
 #include <sys/queue.h>
 
 #ifdef HAVE_REAL_QMIN
-#include "qmin_common.h"
-#include "qmin_dec.h"
-#include "qmin_enc.h"
+#include "qmin_common.h" // @manual
+#include "qmin_dec.h"    // @manual
+#include "qmin_enc.h"    // @manual
 #else
 /* Stub implementation for when you don't have QMIN */
 extern "C" {
@@ -401,7 +400,7 @@ class QMINScheme : public CompressionScheme {
       decoded_size += name_len + val_len;
       std::string name{outbuf, name_len};
       std::string value{outbuf + name_len, val_len};
-      callback.onHeader(name, value);
+      callback.onHeader(HPACKHeaderName(folly::StringPiece(name)), value);
     }
 
     if (0 != qmin_dec_stream_done(qms_dec, stream_id)) {

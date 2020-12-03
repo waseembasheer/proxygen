@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include "PushRequestHandler.h"
 
 #include "proxygen/httpserver/samples/push/PushStats.h"
@@ -25,7 +24,7 @@ std::string gPushBody;
 // Create a large body so we can give time for the push request to be made
 std::string createLargeBody() {
   std::string data = gPushBody;
-  while(data.size() < 1000*1000) {
+  while (data.size() < 1000 * 1000) {
     data += gPushBody;
   }
   return data;
@@ -34,21 +33,22 @@ std::string createLargeBody() {
 PushRequestHandler::PushRequestHandler(PushStats* stats) : stats_(stats) {
   if (gPushBody.empty()) {
     CHECK(folly::readFile(kPushFileName.c_str(), gPushBody))
-      << "Failed to read push file=" << kPushFileName;
+        << "Failed to read push file=" << kPushFileName;
   }
 }
 
 void PushRequestHandler::onRequest(
-  std::unique_ptr<HTTPMessage> headers) noexcept {
+    std::unique_ptr<HTTPMessage> headers) noexcept {
   stats_->recordRequest();
   if (!headers->getHeaders().getSingleOrEmpty("X-PushIt").empty()) {
-    downstreamPush_ = downstream_->newPushedResponse(new PushHandler);
-    if (!downstreamPush_) {
-      // can't push
+    const auto downstreamPush = downstream_->newPushedResponse(new PushHandler);
+    if (downstreamPush.hasError()) {
+      LOG(ERROR) << "can't push: " << getErrorString(downstreamPush.error());
       return;
     }
+    downstreamPush_ = downstreamPush.value();
 
-    if(headers->getPath() == "/requestLargePush") {
+    if (headers->getPathAsStringPiece() == "/requestLargePush") {
       LOG(INFO) << "sending large push ";
 
       ResponseBuilder(downstreamPush_)
@@ -58,9 +58,9 @@ void PushRequestHandler::onRequest(
           .send();
 
       ResponseBuilder(downstreamPush_)
-        .status(200, "OK")
-        .body(createLargeBody())
-        .sendWithEOM();
+          .status(200, "OK")
+          .body(createLargeBody())
+          .sendWithEOM();
     } else {
       LOG(INFO) << "sending small push ";
 
@@ -71,9 +71,9 @@ void PushRequestHandler::onRequest(
           .send();
 
       ResponseBuilder(downstreamPush_)
-        .status(200, "OK")
-        .body(gPushBody)
-        .sendWithEOM();
+          .status(200, "OK")
+          .body(gPushBody)
+          .sendWithEOM();
     }
   }
 }
@@ -107,4 +107,4 @@ void PushRequestHandler::onError(ProxygenError /*err*/) noexcept {
   delete this;
 }
 
-}
+} // namespace PushService

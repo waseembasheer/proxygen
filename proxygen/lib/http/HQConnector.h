@@ -1,20 +1,20 @@
 /*
- *  Copyright (c) 2004-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <fizz/client/AsyncFizzClient.h>
+#include <folly/io/SocketOptionMap.h>
 #include <proxygen/lib/http/session/HQUpstreamSession.h>
 #include <quic/api/LoopDetectorCallback.h>
 #include <quic/api/QuicSocket.h>
 #include <quic/client/QuicClientTransport.h>
-#include <quic/client/handshake/QuicPskCache.h>
+#include <quic/fizz/client/handshake/QuicPskCache.h>
 #include <quic/logging/QLogger.h>
 
 namespace proxygen {
@@ -53,17 +53,19 @@ class HQConnector : public HQSession::ConnectCallback {
 
   void connect(
       folly::EventBase* eventBase,
+      folly::Optional<folly::SocketAddress> localAddr,
       const folly::SocketAddress& connectAddr,
       std::shared_ptr<const fizz::client::FizzClientContext> fizzContext,
       std::shared_ptr<const fizz::CertificateVerifier> verifier,
       std::chrono::milliseconds connectTimeout = std::chrono::milliseconds(0),
-      const folly::AsyncSocket::OptionMap& /* socketOptions */ =
-          folly::AsyncSocket::emptyOptionMap,
+      const folly::SocketOptionMap& socketOptions = folly::emptySocketOptionMap,
       folly::Optional<std::string> sni = folly::none,
       std::shared_ptr<quic::Logger> logger = nullptr,
       std::shared_ptr<quic::QLogger> qLogger = nullptr,
       std::shared_ptr<quic::LoopDetectorCallback> quicLoopDetectorCallback =
-          nullptr);
+          nullptr,
+      std::shared_ptr<quic::QuicTransportStatsCallback>
+          quicTransportStatsCallback = nullptr);
 
   std::chrono::milliseconds timeElapsed();
 

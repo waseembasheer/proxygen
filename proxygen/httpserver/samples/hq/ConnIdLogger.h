@@ -1,21 +1,23 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
+#pragma once
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
+#include <cctype>
 #include <folly/Conv.h>
 #include <folly/File.h>
 #include <folly/Synchronized.h>
 #include <memory>
-#include <regex>
 #include <string>
+
+#include <proxygen/httpserver/samples/hq/HQParams.h>
 
 namespace proxygen {
 
@@ -23,8 +25,8 @@ struct ConnIdLogSink : google::LogSink {
   using FileEntry =
       std::pair<folly::File, std::chrono::system_clock::time_point>;
 
-  ConnIdLogSink(const std::string& logDir, const std::string& prefix)
-      : logDir_(logDir), prefix_(prefix) {
+  ConnIdLogSink(const quic::samples::HQParams& params)
+      : logDir_(params.logdir), prefix_(params.logprefix) {
   }
 
   void send(google::LogSeverity severity,
@@ -35,9 +37,22 @@ struct ConnIdLogSink : google::LogSink {
             const char* message,
             size_t message_len) override {
     folly::StringPiece testMsg(message, message_len);
-    std::match_results<const char*> cidMatch;
-    if (std::regex_match(testMsg.begin(), testMsg.end(), cidMatch, cidRegex_)) {
-      auto cid = cidMatch[1].str();
+    // The incoming string are expected to be in the format of
+    // ".* CID=([a-f0-9]+)[, ].*"
+    folly::StringPiece pre, post; // pre will be ignored
+    folly::split("CID=", testMsg, pre, post);
+    if (post.empty()) {
+      return;
+    }
+    std::vector<folly::StringPiece> cids;
+    folly::split(",", post, cids);
+    for (const auto& cidSp : cids) {
+      if (!std::all_of(cidSp.begin(), cidSp.end(), [](char c) {
+            return std::isalnum(c);
+          })) {
+        continue;
+      }
+      auto cid = cidSp.str();
       int fd = -1;
       {
         auto now = std::chrono::system_clock::now();
@@ -71,8 +86,8 @@ struct ConnIdLogSink : google::LogSink {
                                         line,
                                         ' ',
                                         testMsg);
-      ::write(fd, msg.c_str(), msg.size());
-      ::write(fd, "<br/>", 5);
+      FOLLY_MAYBE_UNUSED auto writeRes = ::write(fd, msg.c_str(), msg.size());
+      writeRes = ::write(fd, "<br/>", 5);
     } // else, not for a specific CID
   }
 
@@ -97,7 +112,6 @@ struct ConnIdLogSink : google::LogSink {
 
   std::string logDir_;
   std::string prefix_;
-  std::regex cidRegex_{".* CID=([a-f0-9]+)[, ].*"};
   folly::Synchronized<FdMap> fdMap_;
   std::array<char, 5> severityMap{{'V', 'I', 'W', 'E', 'F'}};
   const std::chrono::seconds kMaxAge{60};

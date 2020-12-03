@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/FBVector.h>
@@ -18,8 +17,8 @@
 
 #include <bitset>
 #include <cstring>
-#include <string>
 #include <initializer_list>
+#include <string>
 
 namespace proxygen {
 
@@ -31,7 +30,7 @@ extern const std::string empty_string;
  */
 inline bool isLWS(char c) {
   // Technically \r and \n are only allowed in LWS if they appear together.
-  if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+  if (c == ' ' || c == '\n' || c == '\t' || c == '\r') {
     return true;
   }
   return false;
@@ -68,23 +67,26 @@ inline bool isLWS(char c) {
  */
 class HTTPHeaders {
  public:
-   struct HTTPHeaderName {
-     enum Type { CODE, STRING };
-     union {
-       folly::StringPiece name_;
-       HTTPHeaderCode code_;
-     };
-     Type type_;
-     /* implicit */ HTTPHeaderName(HTTPHeaderCode code)
-      : code_(code), type_(CODE) {}
-     /* implicit */ HTTPHeaderName(const char* name)
-      : name_(name), type_(STRING) {}
-     /* implicit */ HTTPHeaderName(folly::StringPiece name)
-      : name_(name), type_(STRING) {}
-   };
+  struct HTTPHeaderName {
+    enum Type { CODE, STRING };
+    union {
+      folly::StringPiece name_;
+      HTTPHeaderCode code_;
+    };
+    Type type_;
+    /* implicit */ HTTPHeaderName(HTTPHeaderCode code)
+        : code_(code), type_(CODE) {
+    }
+    /* implicit */ HTTPHeaderName(const char* name)
+        : name_(name), type_(STRING) {
+    }
+    /* implicit */ HTTPHeaderName(folly::StringPiece name)
+        : name_(name), type_(STRING) {
+    }
+  };
 
-   using headers_initializer_list = std::initializer_list<
-                                std::pair<HTTPHeaderName,folly::StringPiece>>;
+  using headers_initializer_list =
+      std::initializer_list<std::pair<HTTPHeaderName, folly::StringPiece>>;
 
   /*
    * separator used to concatenate multiple values of the same header
@@ -94,18 +96,30 @@ class HTTPHeaders {
 
   FB_EXPORT HTTPHeaders();
   FB_EXPORT ~HTTPHeaders();
-  FB_EXPORT HTTPHeaders (const HTTPHeaders&);
-  FB_EXPORT HTTPHeaders& operator= (const HTTPHeaders&);
-  FB_EXPORT HTTPHeaders (HTTPHeaders&&) noexcept;
-  FB_EXPORT HTTPHeaders& operator= (HTTPHeaders&&);
+  FB_EXPORT HTTPHeaders(const HTTPHeaders&);
+  FB_EXPORT HTTPHeaders& operator=(const HTTPHeaders&);
+  FB_EXPORT HTTPHeaders(HTTPHeaders&&) noexcept;
+  FB_EXPORT HTTPHeaders& operator=(HTTPHeaders&&);
 
   /**
    * Add the header 'name' with value 'value'; if other instances of this
    * header name exist, they will be retained.
    */
   void add(folly::StringPiece name, folly::StringPiece value);
+  void add(folly::StringPiece name, char const* value) {
+    add(name, folly::StringPiece(value));
+  }
+  void add(folly::StringPiece name, char* value) {
+    add(name, folly::StringPiece(value));
+  }
   template <typename T> // T = string
   void add(folly::StringPiece name, T&& value);
+  void add(HTTPHeaderCode code, char const* value) {
+    add(code, folly::StringPiece(value));
+  }
+  void add(HTTPHeaderCode code, char* value) {
+    add(code, folly::StringPiece(value));
+  }
   template <typename T> // T = string
   void add(HTTPHeaderCode code, T&& value);
   void add(headers_initializer_list l);
@@ -136,8 +150,8 @@ class HTTPHeaders {
    * header name, value.
    */
   void setOneVersion(folly::StringPiece name,
-                      HTTPHeaderCode code,
-                      const std::string& value) {
+                     HTTPHeaderCode code,
+                     const std::string& value) {
     removeAllVersions(code, name);
     add(name, value);
   }
@@ -156,7 +170,7 @@ class HTTPHeaders {
    */
   template <typename T>
   std::string combine(const T& header,
-                      const std::string& separator=COMBINE_SEPARATOR) const;
+                      const std::string& separator = COMBINE_SEPARATOR) const;
 
   /**
    * Process the list of all headers, in the order that they were seen:
@@ -208,7 +222,7 @@ class HTTPHeaders {
    * empty_string.
    */
   template <typename T> // either uint8_t or string
-  const std::string & getSingleOrEmpty(const T& nameOrCode) const;
+  const std::string& getSingleOrEmpty(const T& nameOrCode) const;
   const std::string rawGet(const std::string& header) const {
     return getSingleOrEmpty(header);
   }
@@ -280,24 +294,45 @@ class HTTPHeaders {
   static std::bitset<256>& perHopHeaderCodes();
 
  private:
-  // vector storing the 1-byte hashes of header names
-  folly::fbvector<HTTPHeaderCode> codes_;
-
-  /**
-   * Vector storing pointers to header names; we own those pointers which
-   * correspond to HTTP_HEADER_OTHER codes.
-   */
-  folly::fbvector<const std::string *> headerNames_;
-
-  folly::fbvector<std::string> headerValues_;
-
+  std::unique_ptr<uint8_t[]> memory_;
+  size_t length_{0};
+  size_t capacity_{0};
   size_t deletedCount_;
+
+  void copyFrom(const HTTPHeaders& hdrs);
+
+  HTTPHeaderCode* codes() const {
+    return codes(memory_.get(), capacity_);
+  }
+
+  HTTPHeaderCode* codes(const uint8_t* memory, size_t capacity) const {
+    return (HTTPHeaderCode*)(memory + capacity * (sizeof(std::string*) +
+                                                  sizeof(std::string)));
+  }
+
+  std::string** names() const {
+    return names(memory_.get(), capacity_);
+  }
+
+  std::string** names(const uint8_t* memory, size_t capacity) const {
+    return (std::string**)(memory + capacity * sizeof(std::string));
+  }
+
+  std::string* values() const {
+    return values(memory_.get(), capacity_);
+  }
+
+  std::string* values(const uint8_t* memory, size_t) const {
+    return (std::string*)(memory);
+  }
 
   /**
    * The initial capacity of the three vectors, reserved right after
    * construction.
    */
   static const size_t kInitialVectorReserve = 16;
+  static const size_t kRecSize =
+      (sizeof(char) + sizeof(std::string*) + sizeof(std::string));
 
   /**
    * Moves the named header and values from this group to the destination
@@ -308,6 +343,79 @@ class HTTPHeaders {
 
   // deletes the strings in headerNames_ that we own
   void disposeOfHeaderNames();
+
+  void destroy();
+
+  void ensure(size_t minCapacity) {
+    if (capacity_ >= minCapacity) {
+      return;
+    }
+
+    double targetCapacity = capacity_;
+    while (targetCapacity < minCapacity) {
+      if (targetCapacity == 0) {
+        targetCapacity = kInitialVectorReserve;
+      } else {
+        targetCapacity = targetCapacity * 3 / 2;
+      }
+    }
+    resize(targetCapacity);
+  }
+
+  void resize(size_t capacity) {
+    if (capacity <= capacity_) {
+      return;
+    }
+    auto newMemory = std::make_unique<uint8_t[]>(capacity * kRecSize);
+    if (length_ > 0) {
+      memcpy(codes(newMemory.get(), capacity), codes(), length_);
+      memcpy(names(newMemory.get(), capacity),
+             names(),
+             sizeof(std::string*) * length_);
+      auto vNew = values(newMemory.get(), capacity);
+      auto v = values();
+      for (size_t i = 0; i < length_; i++) {
+        new (vNew + i) std::string(std::move(v[i]));
+      }
+    }
+    memory_ = std::move(newMemory);
+    capacity_ = capacity;
+  }
+
+  template <typename T>
+  typename std::enable_if<std::is_same<T, const std::string&>::value ||
+                          std::is_same<T, std::string&&>::value>::type
+  emplace_back(HTTPHeaderCode code, std::string* name, T&& value) {
+    auto v = values();
+    void* valuePtr = (void*)&value;
+    if (length_ == capacity_ && valuePtr >= (void*)v &&
+        valuePtr < (void*)(v + length_)) {
+      std::string savedValue = std::forward<T>(value);
+      emplace_back_impl(code, name, std::move(savedValue));
+    } else {
+      emplace_back_impl(code, name, std::forward<T>(value));
+    }
+  }
+
+  template <typename T>
+  typename std::enable_if<!std::is_same<T, const std::string&>::value &&
+                          !std::is_same<T, std::string&&>::value>::type
+  emplace_back(HTTPHeaderCode code, std::string* name, T&& value) {
+    emplace_back_impl(code, name, std::forward<T>(value));
+  }
+
+  template <typename T>
+  void emplace_back_impl(HTTPHeaderCode code, std::string* name, T&& value) {
+    ensure(length_ + 1);
+    codes()[length_] = code;
+    names()[length_] = name;
+    std::string* p = values() + length_++;
+    new (p) std::string(std::forward<T>(value));
+    if (!p->empty() && isLWS(p->back())) {
+      auto sp = folly::rtrimWhitespace(*p);
+      p->resize(sp.size());
+    }
+  }
 };
 
 // Implementation follows - it has to be in the .h because of the templates
@@ -316,66 +424,73 @@ template <typename T> // T = string
 void HTTPHeaders::add(folly::StringPiece name, T&& value) {
   assert(name.size());
   const HTTPHeaderCode code = HTTPCommonHeaders::hash(name.data(), name.size());
-  codes_.push_back(code);
-  headerNames_.push_back((code == HTTP_HEADER_OTHER)
-      ? new std::string(name.data(), name.size())
-      : HTTPCommonHeaders::getPointerToHeaderName(code));
-  auto s = folly::rtrimWhitespace(std::forward<T>(value));
-  headerValues_.emplace_back(s);
+  auto namePtr =
+      ((code == HTTP_HEADER_OTHER)
+           ? new std::string(name.data(), name.size())
+           : (std::string*)HTTPCommonHeaders::getPointerToName(code));
+  emplace_back(code, namePtr, std::forward<T>(value));
 }
 
 template <typename T> // T = string
 void HTTPHeaders::add(HTTPHeaderCode code, T&& value) {
-  codes_.push_back(code);
-  headerNames_.push_back(HTTPCommonHeaders::getPointerToHeaderName(code));
-  auto s = folly::rtrimWhitespace(std::forward<T>(value));
-  headerValues_.emplace_back(s);
+  auto namePtr = (std::string*)HTTPCommonHeaders::getPointerToName(code);
+  emplace_back(code, namePtr, std::forward<T>(value));
 }
 
 // iterate over the positions (in vector) of all headers with given code
-#define ITERATE_OVER_CODES(Code, Block)                               \
-  {                                                                   \
-    const HTTPHeaderCode* ptr = codes_.data();                        \
-    while (ptr) {                                                     \
-      ptr = (HTTPHeaderCode*)memchr(                                  \
-          (void*)ptr, (Code), codes_.size() - (ptr - codes_.data())); \
-      if (ptr == nullptr)                                             \
-        break;                                                        \
-      const size_t pos = ptr - codes_.data();                         \
-      {Block} ptr++;                                                  \
-    }                                                                 \
+#define ITERATE_OVER_CODES(Code, Block)                   \
+  {                                                       \
+    const HTTPHeaderCode* ptr = codes();                  \
+    while (ptr) {                                         \
+      ptr = (HTTPHeaderCode*)memchr(                      \
+          (void*)ptr, (Code), length_ - (ptr - codes())); \
+      if (ptr == nullptr)                                 \
+        break;                                            \
+      const size_t pos = ptr - codes();                   \
+      {Block} ptr++;                                      \
+    }                                                     \
   }
 
 // iterate over the positions of all headers with given name
-#define ITERATE_OVER_STRINGS(String, Block) \
-    ITERATE_OVER_CODES(HTTP_HEADER_OTHER, { \
-  if (caseInsensitiveEqual((String), *headerNames_[pos])) { \
-    {Block} \
-  } \
-})
+#define ITERATE_OVER_STRINGS(String, Block)              \
+  ITERATE_OVER_CODES(HTTP_HEADER_OTHER, {                \
+    if (caseInsensitiveEqual((String), *names()[pos])) { \
+      {                                                  \
+        Block                                            \
+      }                                                  \
+    }                                                    \
+  })
 
 // iterate over the positions of all headers with given name ignoring - and _
-#define ITERATE_OVER_STRINGS_ALL_VERSION(String, Block) \
-    ITERATE_OVER_CODES(HTTP_HEADER_OTHER, { \
-  if (caseUnderscoreInsensitiveEqual((String), *headerNames_[pos])) { \
-    {Block} \
-  } \
-})
+#define ITERATE_OVER_STRINGS_ALL_VERSION(String, Block)            \
+  ITERATE_OVER_CODES(HTTP_HEADER_OTHER, {                          \
+    if (caseUnderscoreInsensitiveEqual((String), *names()[pos])) { \
+      {                                                            \
+        Block                                                      \
+      }                                                            \
+    }                                                              \
+  })
 
 template <typename LAMBDA> // (const string &, const string &) -> void
 void HTTPHeaders::forEach(LAMBDA func) const {
-  for (size_t i = 0; i < codes_.size(); ++i) {
-    if (codes_[i] != HTTP_HEADER_NONE) {
-      func(*headerNames_[i], headerValues_[i]);
+  auto c = codes();
+  auto n = names();
+  auto v = values();
+  for (size_t i = 0; i < length_; ++i) {
+    if (c[i] != HTTP_HEADER_NONE) {
+      func(*n[i], v[i]);
     }
   }
 }
 
 template <typename LAMBDA>
 void HTTPHeaders::forEachWithCode(LAMBDA func) const {
-  for (size_t i = 0; i < codes_.size(); ++i) {
-    if (codes_[i] != HTTP_HEADER_NONE) {
-      func(codes_[i], *headerNames_[i], headerValues_[i]);
+  auto c = codes();
+  auto n = names();
+  auto v = values();
+  for (size_t i = 0; i < length_; ++i) {
+    if (c[i] != HTTP_HEADER_NONE) {
+      func(c[i], *n[i], v[i]);
     }
   }
 }
@@ -388,7 +503,7 @@ bool HTTPHeaders::forEachValueOfHeader(folly::StringPiece name,
     return forEachValueOfHeader(code, func);
   } else {
     ITERATE_OVER_STRINGS(name, {
-      if (func(headerValues_[pos])) {
+      if (func(values()[pos])) {
         return true;
       }
     });
@@ -397,10 +512,9 @@ bool HTTPHeaders::forEachValueOfHeader(folly::StringPiece name,
 }
 
 template <typename LAMBDA> // const string & -> bool
-bool HTTPHeaders::forEachValueOfHeader(HTTPHeaderCode code,
-                                       LAMBDA func) const {
+bool HTTPHeaders::forEachValueOfHeader(HTTPHeaderCode code, LAMBDA func) const {
   ITERATE_OVER_CODES(code, {
-    if (func(headerValues_[pos])) {
+    if (func(values()[pos])) {
       return true;
     }
   });
@@ -411,14 +525,14 @@ template <typename T>
 std::string HTTPHeaders::combine(const T& header,
                                  const std::string& separator) const {
   std::string combined = "";
-  forEachValueOfHeader(header, [&] (const std::string& value) -> bool {
-      if (combined.empty()) {
-        combined.append(value);
-      } else {
-        combined.append(separator).append(value);
-      }
-      return false;
-    });
+  forEachValueOfHeader(header, [&](const std::string& value) -> bool {
+    if (combined.empty()) {
+      combined.append(value);
+    } else {
+      combined.append(separator).append(value);
+    }
+    return false;
+  });
   return combined;
 }
 
@@ -426,18 +540,20 @@ std::string HTTPHeaders::combine(const T& header,
 template <typename LAMBDA>
 bool HTTPHeaders::removeByPredicate(LAMBDA func) {
   bool removed = false;
-  for (size_t i = 0; i < codes_.size(); ++i) {
-    if (codes_[i] == HTTP_HEADER_NONE ||
-        !func(codes_[i], *headerNames_[i], headerValues_[i])) {
+  auto c = codes();
+  auto n = names();
+  auto v = values();
+  for (size_t i = 0; i < length_; ++i) {
+    if (c[i] == HTTP_HEADER_NONE || !func(c[i], *n[i], v[i])) {
       continue;
     }
 
-    if (codes_[i] == HTTP_HEADER_OTHER) {
-      delete headerNames_[i];
-      headerNames_[i] = nullptr;
+    if (c[i] == HTTP_HEADER_OTHER) {
+      delete n[i];
+      n[i] = nullptr;
     }
 
-    codes_[i] = HTTP_HEADER_NONE;
+    c[i] = HTTP_HEADER_NONE;
     ++deletedCount_;
     removed = true;
   }
@@ -446,9 +562,9 @@ bool HTTPHeaders::removeByPredicate(LAMBDA func) {
 }
 
 template <typename T> // either uint8_t or string
-const std::string & HTTPHeaders::getSingleOrEmpty(const T& nameOrCode) const {
+const std::string& HTTPHeaders::getSingleOrEmpty(const T& nameOrCode) const {
   const std::string* res = nullptr;
-  forEachValueOfHeader(nameOrCode, [&] (const std::string& value) -> bool {
+  forEachValueOfHeader(nameOrCode, [&](const std::string& value) -> bool {
     if (res != nullptr) {
       // a second value is found
       res = nullptr;
@@ -471,4 +587,4 @@ const std::string & HTTPHeaders::getSingleOrEmpty(const T& nameOrCode) const {
 #undef ITERATE_OVER_STRINGS
 #endif // PROXYGEN_HTTPHEADERS_IMPL
 
-}
+} // namespace proxygen

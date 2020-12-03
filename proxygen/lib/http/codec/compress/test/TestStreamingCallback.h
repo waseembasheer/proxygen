@@ -1,26 +1,26 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
-#include <proxygen/lib/http/codec/compress/HeaderCodec.h>
-#include <proxygen/lib/http/codec/compress/HPACKHeader.h>
-#include <proxygen/lib/http/codec/compress/HPACKStreamingCallback.h>
 #include <folly/Expected.h>
 #include <folly/Function.h>
+#include <proxygen/lib/http/codec/compress/HPACKHeader.h>
+#include <proxygen/lib/http/codec/compress/HPACKStreamingCallback.h>
+#include <proxygen/lib/http/codec/compress/HeaderCodec.h>
 
 namespace proxygen {
 
 class TestStreamingCallback : public HPACK::StreamingCallback {
  public:
-  void onHeader(const folly::fbstring& name,
+  void onHeader(const HPACKHeaderName& hname,
                 const folly::fbstring& value) override {
+    auto name = hname.get();
     headers.emplace_back(duplicate(name), name.size(), true, false);
     headers.emplace_back(duplicate(value), value.size(), true, false);
   }
@@ -62,7 +62,6 @@ class TestStreamingCallback : public HPACK::StreamingCallback {
     return result;
   }
 
-
   compress::HeaderPieceList headers;
   HPACK::DecodeError error{HPACK::DecodeError::NONE};
   char* duplicate(const folly::fbstring& str) {
@@ -75,4 +74,4 @@ class TestStreamingCallback : public HPACK::StreamingCallback {
   HTTPHeaderSize decodedSize_;
 };
 
-}
+} // namespace proxygen

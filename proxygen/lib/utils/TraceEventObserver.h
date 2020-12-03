@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/lib/utils/TraceEvent.h>
@@ -14,12 +13,21 @@
 namespace proxygen {
 
 /*
- * Obersver interface to record trace events.
+ * Observer interface to record trace events.
+ *
+ * Subclasses of TraceEventObserver may log the trace events
+ * to a destination analytics pipeline or forward them elsewhere.
  */
 struct TraceEventObserver {
-  virtual ~TraceEventObserver() {}
-  virtual void traceEventAvailable(TraceEvent) noexcept {}
-  virtual void emitTraceEvents(std::vector<TraceEvent>) noexcept {}
+  virtual ~TraceEventObserver() {
+  }
+  /**
+   * Lets the handler receive an arbitrary TraceEvent.
+   */
+  virtual void traceEventAvailable(TraceEvent) noexcept {
+  }
+  virtual void emitTraceEvents(std::vector<TraceEvent>) noexcept {
+  }
 };
 
-}
+} // namespace proxygen

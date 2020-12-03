@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/session/HTTPSessionBase.h>
 
 #include <proxygen/lib/http/codec/HTTP2Codec.h>
@@ -18,7 +17,7 @@ using folly::SocketAddress;
 using wangle::TransportInfo;
 
 namespace proxygen {
-uint32_t HTTPSessionBase::kDefaultReadBufLimit = 65536;
+std::atomic<uint32_t> HTTPSessionBase::kDefaultReadBufLimit{65536};
 uint32_t HTTPSessionBase::maxReadBufferSize_ = 4000;
 uint32_t HTTPSessionBase::egressBodySizeLimit_ = 4096;
 uint32_t HTTPSessionBase::kDefaultWriteBufLimit = 65536;
@@ -29,21 +28,19 @@ HTTPSessionBase::HTTPSessionBase(const SocketAddress& localAddr,
                                  const TransportInfo& tinfo,
                                  InfoCallback* infoCallback,
                                  std::unique_ptr<HTTPCodec> codec,
-                                 const WheelTimerInstance& timeout,
+                                 const WheelTimerInstance& wheelTimer,
                                  HTTPCodec::StreamID rootNodeId)
     : infoCallback_(infoCallback),
       transportInfo_(tinfo),
       codec_(std::move(codec)),
       txnEgressQueue_(isHTTP2CodecProtocol(codec_->getProtocol())
-                          ? WheelTimerInstance(timeout)
+                          ? WheelTimerInstance(wheelTimer)
                           : WheelTimerInstance(),
                       rootNodeId),
       localAddr_(localAddr),
       peerAddr_(peerAddr),
       prioritySample_(false),
       h2PrioritiesEnabled_(true),
-      inResume_(false),
-      pendingPause_(false),
       exHeadersEnabled_(false) {
 
   // If we receive IPv4-mapped IPv6 addresses, convert them to IPv4.
@@ -88,6 +85,8 @@ bool HTTPSessionBase::onBodyImpl(std::unique_ptr<folly::IOBuf> chain,
                                  HTTPTransaction* txn) {
   DestructorGuard dg(this);
   auto oldSize = pendingReadSize_;
+  CHECK_LE(pendingReadSize_,
+           std::numeric_limits<uint32_t>::max() - length - padding);
   pendingReadSize_ += length + padding;
   txn->onIngressBody(std::move(chain), padding);
   if (oldSize < pendingReadSize_) {
@@ -136,33 +135,8 @@ void HTTPSessionBase::updateWriteBufSize(int64_t delta) {
   // the sock_'s write buffer.
   delta += pendingWriteSizeDelta_;
   pendingWriteSizeDelta_ = 0;
-  bool wasExceeded = egressLimitExceeded();
   DCHECK(delta >= 0 || uint64_t(-delta) <= pendingWriteSize_);
   pendingWriteSize_ += delta;
-
-  if (egressLimitExceeded() && !wasExceeded) {
-    // Exceeded limit. Pause reading on the incoming stream.
-    if (inResume_) {
-      VLOG(3) << "Pausing txn egress for " << *this << " deferred";
-      pendingPause_ = true;
-    } else {
-      VLOG(3) << "Pausing txn egress for " << *this;
-      pauseTransactions();
-    }
-  } else if (!egressLimitExceeded() && wasExceeded) {
-    // Dropped below limit. Resume reading on the incoming stream if needed.
-    if (inResume_) {
-      if (pendingPause_) {
-        VLOG(3) << "Cancel deferred txn egress pause for " << *this;
-        pendingPause_ = false;
-      } else {
-        VLOG(3) << "Ignoring redundant resume for " << *this;
-      }
-    } else {
-      VLOG(3) << "Resuming txn egress for " << *this;
-      resumeTransactions();
-    }
-  }
 }
 
 void HTTPSessionBase::updatePendingWrites() {
@@ -172,40 +146,19 @@ void HTTPSessionBase::updatePendingWrites() {
 }
 
 void HTTPSessionBase::resumeTransactions() {
-  CHECK(!inResume_);
-  inResume_ = true;
   DestructorGuard g(this);
   auto resumeFn = [](HTTP2PriorityQueue&,
                      HTTPCodec::StreamID,
                      HTTPTransaction* txn,
                      double) {
-    if (txn) {
+    if (txn && !txn->isEgressComplete()) {
       txn->resumeEgress();
     }
     return false;
   };
-  auto stopFn = [this] {
-    return (!hasActiveTransactions() || egressLimitExceeded());
-  };
+  auto stopFn = [this] { return (!hasActiveTransactions()); };
 
   txnEgressQueue_.iterateBFS(resumeFn, stopFn, true /* all */);
-  inResume_ = false;
-  if (pendingPause_) {
-    VLOG(3) << "Pausing txn egress for " << *this;
-    pendingPause_ = false;
-    pauseTransactions();
-  }
-}
-
-void HTTPSessionBase::setNewTransactionPauseState(HTTPTransaction* txn) {
-  if (!egressLimitExceeded()) {
-    return;
-  }
-
-  CHECK(txn);
-  // If writes are paused, start this txn off in the egress paused state
-  VLOG(4) << *this << " starting streamID=" << txn->getID() << " egress paused";
-  txn->pauseEgress();
 }
 
 void HTTPSessionBase::handleErrorDirectly(HTTPTransaction* txn,
@@ -247,6 +200,13 @@ void HTTPSessionBase::attachToSessionController() {
   auto controllerPtr = getController();
   if (controllerPtr) {
     controllerPtr->attachSession(this);
+  }
+}
+
+void HTTPSessionBase::informSessionControllerTransportReady() {
+  auto controllerPtr = getController();
+  if (controllerPtr) {
+    controllerPtr->onTransportReady(this);
   }
 }
 

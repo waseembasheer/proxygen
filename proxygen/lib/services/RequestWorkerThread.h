@@ -1,17 +1,17 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <cstdint>
 #include <map>
 #include <proxygen/lib/services/WorkerThread.h>
+#include <wangle/acceptor/LoadShedConfiguration.h>
 
 namespace proxygen {
 
@@ -26,7 +26,8 @@ class RequestWorkerThread : public WorkerThread {
  public:
   class FinishCallback {
    public:
-    virtual ~FinishCallback() noexcept {}
+    virtual ~FinishCallback() noexcept {
+    }
     virtual void workerStarted(RequestWorkerThread*) = 0;
     virtual void workerFinished(RequestWorkerThread*) = 0;
   };
@@ -38,9 +39,14 @@ class RequestWorkerThread : public WorkerThread {
    * @param threadId  A unique ID for this worker.
    * @param evbName   The event base will ne named to this name (thread name)
    */
-  RequestWorkerThread(
-    FinishCallback& callback, uint8_t threadId,
-    const std::string& evbName = std::string());
+  RequestWorkerThread(FinishCallback& callback,
+                      uint8_t threadId,
+                      const std::string& evbName = std::string());
+
+  /**
+   * Reset the underlying event base prior to WorkerThread destruction.
+   */
+  ~RequestWorkerThread() override;
 
   /**
    * Return a unique 64bit identifier.
@@ -54,7 +60,7 @@ class RequestWorkerThread : public WorkerThread {
 
   static RequestWorkerThread* getRequestWorkerThread() {
     RequestWorkerThread* self = dynamic_cast<RequestWorkerThread*>(
-      WorkerThread::getCurrentWorkerThread());
+        WorkerThread::getCurrentWorkerThread());
     CHECK_NOTNULL(self);
     return self;
   }
@@ -78,6 +84,21 @@ class RequestWorkerThread : public WorkerThread {
   }
 
   /**
+   * Get/set the worker thread's bound load shed configuration instance.
+   * Used by derivative classes.  Updates are propagated seamlessly via
+   * the use of swapping such that threads will automatically see updated
+   * fields on update.
+   */
+  std::shared_ptr<const wangle::LoadShedConfiguration> getLoadShedConfig()
+      const {
+    return loadShedConfig_;
+  }
+  void setLoadShedConfig(
+      std::shared_ptr<const wangle::LoadShedConfiguration> loadShedConfig) {
+    loadShedConfig_.swap(loadShedConfig);
+  }
+
+  /**
    * Flush any thread-local stats being tracked by our ServiceWorkers.
    *
    * This must be invoked from within worker's thread.
@@ -95,7 +116,12 @@ class RequestWorkerThread : public WorkerThread {
   // The ServiceWorkers executing in this worker
   std::map<Service*, ServiceWorker*> serviceWorkers_;
 
+  // Every worker instance has their own version of load shed config.
+  // This enables every request worker thread, and derivative there of,
+  // to both access and update this field in a thread-safe way.
+  std::shared_ptr<const wangle::LoadShedConfiguration> loadShedConfig_{nullptr};
+
   FinishCallback& callback_;
 };
 
-}
+} // namespace proxygen

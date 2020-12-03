@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <boost/optional/optional_io.hpp>
 #include <fizz/record/Extensions.h>
 #include <fizz/record/Types.h>
@@ -67,6 +66,7 @@ class MockCodecDownstreamTest : public testing::Test {
     EXPECT_CALL(mockController_, getGracefulShutdownTimeout())
         .WillRepeatedly(Return(std::chrono::milliseconds(0)));
     EXPECT_CALL(mockController_, attachSession(_));
+    EXPECT_CALL(mockController_, onTransportReady(_));
     EXPECT_CALL(*codec_, setCallback(_))
         .WillRepeatedly(SaveArg<0>(&codecCallback_));
     EXPECT_CALL(*codec_, supportsParallelRequests())
@@ -103,6 +103,7 @@ class MockCodecDownstreamTest : public testing::Test {
                                       HTTPCodec::StreamID /*lastStream*/,
                                       ErrorCode,
                                       std::shared_ptr<folly::IOBuf>) {
+          LOG(INFO) << "MOCK GENERATE GOAWAY";
           if (reusable_) {
             reusable_ = false;
             drainPending_ = doubleGoaway_;
@@ -123,7 +124,7 @@ class MockCodecDownstreamTest : public testing::Test {
     HTTPSession::setDefaultReadBufferLimit(65536);
     httpSession_ =
         new HTTPDownstreamSession(transactionTimeouts_.get(),
-                                  AsyncTransportWrapper::UniquePtr(transport_),
+                                  AsyncTransport::UniquePtr(transport_),
                                   localAddr,
                                   peerAddr,
                                   &mockController_,
@@ -134,7 +135,7 @@ class MockCodecDownstreamTest : public testing::Test {
     eventBase_.loop();
   }
 
-  void onWriteChain(folly::AsyncTransportWrapper::WriteCallback* callback,
+  void onWriteChain(folly::AsyncTransport::WriteCallback* callback,
                     std::shared_ptr<IOBuf> /*iob*/,
                     WriteFlags) {
     writeCount_++;
@@ -185,7 +186,7 @@ class MockCodecDownstreamTest : public testing::Test {
   std::string userAgent_{"MockCodec"};
   HTTPCodec::Callback* codecCallback_{nullptr};
   NiceMock<MockAsyncTransport>* transport_;
-  folly::AsyncTransportWrapper::ReadCallback* transportCb_;
+  folly::AsyncTransport::ReadCallback* transportCb_;
   folly::HHWheelTimer::UniquePtr transactionTimeouts_;
   StrictMock<MockController> mockController_;
   HTTPDownstreamSession* httpSession_;
@@ -197,7 +198,7 @@ class MockCodecDownstreamTest : public testing::Test {
   bool liveGoaways_{false};
   bool invokeWriteSuccess_{false};
   uint32_t writeCount_{0};
-  std::vector<folly::AsyncTransportWrapper::WriteCallback*> cbs_;
+  std::vector<folly::AsyncTransport::WriteCallback*> cbs_;
 };
 
 TEST_F(MockCodecDownstreamTest, OnAbortThenTimeouts) {
@@ -475,13 +476,14 @@ TEST_F(MockCodecDownstreamTest, ServerPushAbort) {
 }
 
 TEST_F(MockCodecDownstreamTest, ServerPushAbortAssoc) {
-  // Test that all associated push transactions are aborted when client aborts
+  // Test that associated push transactions remain alive when client aborts
   // the assoc stream
   MockHTTPHandler handler;
   MockHTTPPushHandler pushHandler1;
   MockHTTPPushHandler pushHandler2;
 
   fakeMockCodec(*codec_);
+  invokeWriteSuccess_ = true;
 
   EXPECT_CALL(mockController_, getRequestHandler(_, _))
       .WillOnce(Return(&handler));
@@ -507,29 +509,15 @@ TEST_F(MockCodecDownstreamTest, ServerPushAbortAssoc) {
         eventBase_.loop();
       }));
 
-  // Both push txns and the assoc txn should be aborted
+  // Both push txns and the assoc txn should remain alive, and in this case
+  // time out.
   EXPECT_CALL(pushHandler1, setTransaction(_))
       .WillOnce(Invoke(
           [&pushHandler1](HTTPTransaction* txn) { pushHandler1.txn_ = txn; }));
-  EXPECT_CALL(pushHandler1, onError(_))
-      .WillOnce(Invoke([&](const HTTPException& err) {
-        EXPECT_TRUE(err.hasProxygenError());
-        EXPECT_EQ(err.getProxygenError(), kErrorStreamAbort);
-        ASSERT_EQ("Stream aborted, streamID=1, code=CANCEL",
-                  std::string(err.what()));
-      }));
-  EXPECT_CALL(pushHandler1, detachTransaction());
-
   EXPECT_CALL(pushHandler2, setTransaction(_))
       .WillOnce(Invoke(
           [&pushHandler2](HTTPTransaction* txn) { pushHandler2.txn_ = txn; }));
-  EXPECT_CALL(pushHandler2, onError(_))
-      .WillOnce(Invoke([&](const HTTPException& err) {
-        EXPECT_TRUE(err.hasProxygenError());
-        EXPECT_EQ(err.getProxygenError(), kErrorStreamAbort);
-        ASSERT_EQ("Stream aborted, streamID=1, code=CANCEL",
-                  std::string(err.what()));
-      }));
+  EXPECT_CALL(pushHandler1, detachTransaction());
   EXPECT_CALL(pushHandler2, detachTransaction());
 
   EXPECT_CALL(handler, onError(_))
@@ -549,8 +537,15 @@ TEST_F(MockCodecDownstreamTest, ServerPushAbortAssoc) {
   // Send client abort on assoc stream
   codecCallback_->onAbort(HTTPCodec::StreamID(1), ErrorCode::CANCEL);
 
+  // Push txns can still send body and EOM
+  pushHandler1.sendBody(200);
+  pushHandler2.sendBody(200);
+  pushHandler1.sendEOM();
+  pushHandler2.sendEOM();
+
   eventBase_.loop();
 
+  EXPECT_CALL(*codec_, onIngressEOF());
   EXPECT_CALL(mockController_, detachSession(_));
   httpSession_->dropConnection();
 }
@@ -619,10 +614,10 @@ TEST_F(MockCodecDownstreamTest, ServerPushClientMessage) {
 
 TEST_F(MockCodecDownstreamTest, ReadTimeout) {
   // Test read timeout path
+  codec_->enableDoubleGoawayDrain();
   MockHTTPHandler handler1;
   auto req1 = makeGetRequest();
 
-  fakeMockCodec(*codec_);
   EXPECT_CALL(*codec_, onIngressEOF()).WillRepeatedly(Return());
 
   EXPECT_CALL(mockController_, getRequestHandler(_, _))
@@ -635,11 +630,9 @@ TEST_F(MockCodecDownstreamTest, ReadTimeout) {
 
   codecCallback_->onMessageBegin(HTTPCodec::StreamID(1), req1.get());
   codecCallback_->onHeadersComplete(HTTPCodec::StreamID(1), std::move(req1));
-  // force the read timeout to expire, should be a no-op because the txn is
-  // still expecting EOM and has its own timer.
   httpSession_->timeoutExpired();
   EXPECT_EQ(httpSession_->getConnectionCloseReason(),
-            ConnectionCloseReason::kMAX_REASON);
+            ConnectionCloseReason::TIMEOUT);
 
   EXPECT_CALL(handler1, onEOM()).WillOnce(Invoke([&handler1]() {
     handler1.txn_->pauseIngress();
@@ -649,12 +642,10 @@ TEST_F(MockCodecDownstreamTest, ReadTimeout) {
   // upstream
   codecCallback_->onMessageComplete(HTTPCodec::StreamID(1), false);
   httpSession_->timeoutExpired();
-  EXPECT_EQ(httpSession_->getConnectionCloseReason(),
-            ConnectionCloseReason::kMAX_REASON);
 
   EXPECT_CALL(*transport_, writeChain(_, _, _))
       .WillRepeatedly(
-          Invoke([](folly::AsyncTransportWrapper::WriteCallback* callback,
+          Invoke([](folly::AsyncTransport::WriteCallback* callback,
                     std::shared_ptr<folly::IOBuf>,
                     folly::WriteFlags) { callback->writeSuccess(); }));
 
@@ -662,16 +653,12 @@ TEST_F(MockCodecDownstreamTest, ReadTimeout) {
 
   // Send the response, timeout.  Now it's idle and should close.
   handler1.txn_->resumeIngress();
+  EXPECT_CALL(*codec_, generateHeader(_, 1, _, _, _));
   handler1.sendReplyWithBody(200, 100);
-  eventBase_.loop();
-
-  httpSession_->timeoutExpired();
-  EXPECT_EQ(httpSession_->getConnectionCloseReason(),
-            ConnectionCloseReason::TIMEOUT);
-
-  // tear down the test
+  EXPECT_CALL(*codec_,
+              generateBody(_, 1, PtrBufHasLen(uint64_t(100)), _, true));
   EXPECT_CALL(mockController_, detachSession(_));
-  httpSession_->dropConnection();
+  eventBase_.loop();
 }
 
 TEST_F(MockCodecDownstreamTest, Ping) {
@@ -767,10 +754,9 @@ TEST_F(MockCodecDownstreamTest, Buffering) {
           InvokeWithoutArgs([&handler]() { handler.txn_->pauseIngress(); }));
 
   EXPECT_CALL(*transport_, writeChain(_, _, _))
-      .WillRepeatedly(
-          Invoke([&](folly::AsyncTransportWrapper::WriteCallback* callback,
-                     const shared_ptr<IOBuf>&,
-                     WriteFlags) { callback->writeSuccess(); }));
+      .WillRepeatedly(Invoke([&](folly::AsyncTransport::WriteCallback* callback,
+                                 const shared_ptr<IOBuf>&,
+                                 WriteFlags) { callback->writeSuccess(); }));
 
   codecCallback_->onMessageBegin(HTTPCodec::StreamID(1), req1.get());
   codecCallback_->onHeadersComplete(HTTPCodec::StreamID(1), std::move(req1));
@@ -877,7 +863,7 @@ TEST_F(MockCodecDownstreamTest, SpdyWindow) {
 
   EXPECT_CALL(*transport_, writeChain(_, _, _))
       .WillRepeatedly(
-          Invoke([](folly::AsyncTransportWrapper::WriteCallback* callback,
+          Invoke([](folly::AsyncTransport::WriteCallback* callback,
                     std::shared_ptr<folly::IOBuf>,
                     folly::WriteFlags) { callback->writeSuccess(); }));
   eventBase_.loop();
@@ -928,7 +914,7 @@ TEST_F(MockCodecDownstreamTest, DoubleResume) {
 
   EXPECT_CALL(*transport_, writeChain(_, _, _))
       .WillRepeatedly(
-          Invoke([](folly::AsyncTransportWrapper::WriteCallback* callback,
+          Invoke([](folly::AsyncTransport::WriteCallback* callback,
                     std::shared_ptr<folly::IOBuf>,
                     folly::WriteFlags) { callback->writeSuccess(); }));
 
@@ -939,7 +925,6 @@ TEST_F(MockCodecDownstreamTest, DoubleResume) {
 void MockCodecDownstreamTest::testConnFlowControlBlocked(bool timeout) {
   // Let the connection level flow control window fill and then make sure
   // control frames still can be processed
-  InSequence enforceOrder;
   NiceMock<MockHTTPHandler> handler1;
   NiceMock<MockHTTPHandler> handler2;
   auto wantToWrite = spdy::kInitialWindow + 50000;
@@ -1266,15 +1251,14 @@ void MockCodecDownstreamTest::testGoaway(bool doubleGoaway,
     codecCallback_->onMessageComplete(1, false);
   }
 
-  folly::AsyncTransportWrapper::WriteCallback* cb = nullptr;
+  folly::AsyncTransport::WriteCallback* cb = nullptr;
   EXPECT_CALL(*transport_, writeChain(_, _, _))
-      .WillOnce(
-          Invoke([&](folly::AsyncTransportWrapper::WriteCallback* callback,
-                     const shared_ptr<IOBuf>,
-                     WriteFlags) {
-            // don't immediately flush the goaway
-            cb = callback;
-          }));
+      .WillOnce(Invoke([&](folly::AsyncTransport::WriteCallback* callback,
+                           const shared_ptr<IOBuf>,
+                           WriteFlags) {
+        // don't immediately flush the goaway
+        cb = callback;
+      }));
   if (doubleGoaway || !dropConnection) {
     // single goaway, drop connection doesn't get onIngressEOF
     EXPECT_CALL(*codec_, onIngressEOF());

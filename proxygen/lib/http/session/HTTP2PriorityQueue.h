@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/IntrusiveList.h>
@@ -15,9 +14,9 @@
 #include <proxygen/lib/http/codec/HTTPCodec.h>
 #include <proxygen/lib/utils/WheelTimerInstance.h>
 
-#include <boost/intrusive/unordered_set.hpp>
 #include <deque>
 #include <list>
+#include <unordered_map>
 
 namespace proxygen {
 
@@ -71,15 +70,12 @@ class HTTP2PriorityQueue : public HTTP2PriorityQueueBase {
 
  private:
   class Node;
-  using NodeMap = boost::intrusive::
-      unordered_set<Node, boost::intrusive::constant_time_size<false>>;
 
   static const size_t kNumBuckets = 100;
 
  public:
   HTTP2PriorityQueue(HTTPCodec::StreamID rootNodeId = 0)
       : HTTP2PriorityQueueBase(rootNodeId),
-        nodes_(NodeMap::bucket_traits(nodeBuckets_, kNumBuckets)),
         root_(*this, nullptr, rootNodeId, 1, nullptr) {
     root_.setPermanent();
   }
@@ -87,7 +83,6 @@ class HTTP2PriorityQueue : public HTTP2PriorityQueueBase {
   explicit HTTP2PriorityQueue(const WheelTimerInstance& timeout,
                               HTTPCodec::StreamID rootNodeId = 0)
       : HTTP2PriorityQueueBase(rootNodeId),
-        nodes_(NodeMap::bucket_traits(nodeBuckets_, kNumBuckets)),
         root_(*this, nullptr, rootNodeId, 1, nullptr),
         timeout_(timeout) {
     root_.setPermanent();
@@ -184,6 +179,8 @@ class HTTP2PriorityQueue : public HTTP2PriorityQueueBase {
   }
 
  private:
+  static Node* nodeFromBaseNode(BaseNode* bnode);
+
   // Find the node in priority tree
   Node* find(HTTPCodec::StreamID id, uint64_t* depth = nullptr);
 
@@ -218,8 +215,7 @@ class HTTP2PriorityQueue : public HTTP2PriorityQueueBase {
 
   class Node
       : public BaseNode
-      , public folly::HHWheelTimer::Callback
-      , public boost::intrusive::unordered_set_base_hook<link_mode> {
+      , public folly::HHWheelTimer::Callback {
    public:
     static const uint16_t kDefaultWeight = 16;
 
@@ -230,31 +226,6 @@ class HTTP2PriorityQueue : public HTTP2PriorityQueueBase {
          HTTPTransaction* txn);
 
     ~Node() override;
-
-    // Functor comparing id to node and vice-versa
-    struct IdNodeEqual {
-      bool operator()(const HTTPCodec::StreamID& id, const Node& node) {
-        return id == node.id_;
-      }
-      bool operator()(const Node& node, const HTTPCodec::StreamID& id) {
-        return node.id_ == id;
-      }
-    };
-
-    // Hash function
-    struct IdHash {
-      size_t operator()(const HTTPCodec::StreamID& id) const {
-        return boost::hash<HTTPCodec::StreamID>()(id);
-      }
-    };
-
-    // Equality and hash operators (for intrusive set)
-    friend bool operator==(const Node& lhs, const Node& rhs) {
-      return lhs.id_ == rhs.id_;
-    }
-    friend std::size_t hash_value(const Node& node) {
-      return IdHash()(node.id_);
-    }
 
     void setPermanent() {
       isPermanent_ = true;
@@ -434,7 +405,8 @@ class HTTP2PriorityQueue : public HTTP2PriorityQueueBase {
     folly::IntrusiveList<Node, &Node::enqueuedHook_> enqueuedChildren_;
   };
 
-  typename NodeMap::bucket_type nodeBuckets_[kNumBuckets];
+  using NodeMap = std::unordered_map<HTTPCodec::StreamID, Node*>;
+
   NodeMap nodes_;
   Node root_;
   uint32_t rebuildCount_{0};
@@ -442,6 +414,7 @@ class HTTP2PriorityQueue : public HTTP2PriorityQueueBase {
   uint64_t activeCount_{0};
   uint32_t maxVirtualNodes_{50};
   uint32_t numVirtualNodes_{0};
+  folly::Optional<HTTPCodec::StreamID> largestId_;
   bool pendingWeightChange_{false};
   WheelTimerInstance timeout_;
 

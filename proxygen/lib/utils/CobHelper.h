@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <atomic>
@@ -25,9 +24,8 @@ class CobHelper {
   CobHelper(size_t itemsLeft,
             const std::function<void()>& cob,
             const std::function<void(const std::exception&)>& ecob)
-  : itemsLeft_(itemsLeft)
-, cob_(cob)
-, ecob_(ecob) {}
+      : itemsLeft_(itemsLeft), cob_(cob), ecob_(ecob) {
+  }
 
   void setError(const std::string& emsg) {
     CHECK(!emsg.empty());
@@ -42,6 +40,7 @@ class CobHelper {
 
     allDone();
   }
+
  private:
   void allDone() {
     if (!emsg_.empty()) {
@@ -59,4 +58,4 @@ class CobHelper {
   std::function<void(const std::exception&)> ecob_;
 };
 
-}
+} // namespace proxygen

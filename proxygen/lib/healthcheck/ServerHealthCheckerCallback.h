@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <memory>
@@ -23,6 +22,10 @@ struct ServerLoadInfo {
   double cpuSys{-1.};
   double cpuIdle{-1.};
   LoadType queueLen{0};
+  bool operator!=(const ServerLoadInfo& rhs) {
+    return cpuUser != rhs.cpuUser || cpuSys != rhs.cpuSys ||
+           cpuIdle != rhs.cpuIdle || queueLen != rhs.queueLen;
+  }
 };
 
 enum class HealthCheckSource {

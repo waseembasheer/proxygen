@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/HTTPMessage.h>
 
 #include <boost/algorithm/string.hpp>
@@ -16,18 +15,11 @@
 #include <string>
 #include <vector>
 
-using folly::IOBuf;
-using folly::Optional;
 using folly::StringPiece;
 using std::pair;
 using std::string;
-using std::unique_ptr;
 
 namespace {
-const string kHeaderStr_ = "header.";
-const string kQueryStr_ = "query.";
-const string kCookieStr = "cookie.";
-
 /**
  * Create a C locale once and pass it to all the boost string methods
  * that would otherwise create and destruct a temporary locale object
@@ -35,7 +27,7 @@ const string kCookieStr = "cookie.";
  * approximately 1% of our total CPU time on temporary locale objects.)
  */
 std::locale defaultLocale;
-}
+} // namespace
 
 namespace proxygen {
 
@@ -50,7 +42,11 @@ void HTTPMessage::stripPerHopHeaders() {
   // Some code paths end up recyling a single HTTPMessage instance for multiple
   // requests, and adding their own per-hop headers each time. In that case, we
   // don't want to accumulate these headers.
-  strippedPerHopHeaders_.removeAll();
+  if (!strippedPerHopHeaders_) {
+    strippedPerHopHeaders_ = std::make_unique<HTTPHeaders>();
+  } else {
+    strippedPerHopHeaders_->removeAll();
+  }
 
   if (!trailersAllowed_) {
     // Because stripPerHopHeaders can be called multiple times, don't
@@ -58,88 +54,108 @@ void HTTPMessage::stripPerHopHeaders() {
     trailersAllowed_ = checkForHeaderToken(HTTP_HEADER_TE, "trailers", false);
   }
 
-  headers_.stripPerHopHeaders(strippedPerHopHeaders_);
+  headers_.stripPerHopHeaders(*strippedPerHopHeaders_);
 }
 
-HTTPMessage::HTTPMessage() :
-    startTime_(getCurrentTime()),
-    seqNo_(-1),
-    localIP_(),
-    versionStr_("1.0"),
-    fields_(),
-    version_(1,0),
-    sslVersion_(0), sslCipher_(nullptr), protoStr_(nullptr), pri_(0),
-    parsedCookies_(false), parsedQueryParams_(false),
-    chunked_(false), upgraded_(false), wantsKeepalive_(true),
-    trailersAllowed_(false), secure_(false), partiallyReliable_(false),
-    upgradeWebsocket_(HTTPMessage::WebSocketUpgrade::NONE) {
+HTTPMessage::HTTPMessage()
+    : startTime_(getCurrentTime()),
+      localIP_(),
+      versionStr_("1.0"),
+      fields_(),
+      upgradeWebsocket_(HTTPMessage::WebSocketUpgrade::NONE),
+      seqNo_(-1),
+      sslVersion_(0),
+      sslCipher_(nullptr),
+      protoStr_(nullptr),
+      pri_(kDefaultHttpPriorityUrgency),
+      incremental_(kDefaultHttpPriorityIncremental),
+      version_(1, 0),
+      parsedCookies_(false),
+      parsedQueryParams_(false),
+      chunked_(false),
+      upgraded_(false),
+      wantsKeepalive_(true),
+      trailersAllowed_(false),
+      secure_(false),
+      partiallyReliable_(false) {
 }
 
 HTTPMessage::~HTTPMessage() {
 }
 
-HTTPMessage::HTTPMessage(const HTTPMessage& message) :
-    startTime_(message.startTime_),
-    seqNo_(message.seqNo_),
-    dstAddress_(message.dstAddress_),
-    dstIP_(message.dstIP_),
-    dstPort_(message.dstPort_),
-    localIP_(message.localIP_),
-    versionStr_(message.versionStr_),
-    fields_(message.fields_),
-    cookies_(message.cookies_),
-    queryParams_(message.queryParams_),
-    version_(message.version_),
-    headers_(message.headers_),
-    strippedPerHopHeaders_(message.strippedPerHopHeaders_),
-    sslVersion_(message.sslVersion_),
-    sslCipher_(message.sslCipher_),
-    protoStr_(message.protoStr_),
-    pri_(message.pri_),
-    h2Pri_(message.h2Pri_),
-    parsedCookies_(message.parsedCookies_),
-    parsedQueryParams_(message.parsedQueryParams_),
-    chunked_(message.chunked_),
-    upgraded_(message.upgraded_),
-    wantsKeepalive_(message.wantsKeepalive_),
-    trailersAllowed_(message.trailersAllowed_),
-    secure_(message.secure_),
-    partiallyReliable_(message.partiallyReliable_),
-    upgradeWebsocket_(message.upgradeWebsocket_) {
+HTTPMessage::HTTPMessage(const HTTPMessage& message)
+    : startTime_(message.startTime_),
+      dstAddress_(message.dstAddress_),
+      dstIP_(message.dstIP_),
+      dstPort_(message.dstPort_),
+      localIP_(message.localIP_),
+      versionStr_(message.versionStr_),
+      fields_(message.fields_),
+      cookies_(message.cookies_),
+      queryParams_(message.queryParams_),
+      headers_(message.headers_),
+      upgradeWebsocket_(message.upgradeWebsocket_),
+      seqNo_(message.seqNo_),
+      sslVersion_(message.sslVersion_),
+      sslCipher_(message.sslCipher_),
+      protoStr_(message.protoStr_),
+      pri_(message.pri_),
+      incremental_(message.incremental_),
+      h2Pri_(message.h2Pri_),
+      version_(message.version_),
+      parsedCookies_(message.parsedCookies_),
+      parsedQueryParams_(message.parsedQueryParams_),
+      chunked_(message.chunked_),
+      upgraded_(message.upgraded_),
+      wantsKeepalive_(message.wantsKeepalive_),
+      trailersAllowed_(message.trailersAllowed_),
+      secure_(message.secure_),
+      partiallyReliable_(message.partiallyReliable_) {
+  if (isRequest()) {
+    setURL(request().url_);
+  }
+  if (message.strippedPerHopHeaders_) {
+    strippedPerHopHeaders_ =
+        std::make_unique<HTTPHeaders>(*message.strippedPerHopHeaders_);
+  }
   if (message.trailers_) {
     trailers_ = std::make_unique<HTTPHeaders>(*message.trailers_);
   }
 }
 
-HTTPMessage::HTTPMessage(HTTPMessage&& message) noexcept :
-    startTime_(message.startTime_),
-    seqNo_(message.seqNo_),
-    dstAddress_(std::move(message.dstAddress_)),
-    dstIP_(std::move(message.dstIP_)),
-    dstPort_(message.dstPort_),
-    localIP_(std::move(message.localIP_)),
-    versionStr_(std::move(message.versionStr_)),
-    fields_(std::move(message.fields_)),
-    cookies_(std::move(message.cookies_)),
-    queryParams_(std::move(message.queryParams_)),
-    version_(message.version_),
-    headers_(std::move(message.headers_)),
-    strippedPerHopHeaders_(std::move(message.strippedPerHopHeaders_)),
-    trailers_(std::move(message.trailers_)),
-    sslVersion_(message.sslVersion_),
-    sslCipher_(message.sslCipher_),
-    protoStr_(message.protoStr_),
-    pri_(message.pri_),
-    h2Pri_(message.h2Pri_),
-    parsedCookies_(message.parsedCookies_),
-    parsedQueryParams_(message.parsedQueryParams_),
-    chunked_(message.chunked_),
-    upgraded_(message.upgraded_),
-    wantsKeepalive_(message.wantsKeepalive_),
-    trailersAllowed_(message.trailersAllowed_),
-    secure_(message.secure_),
-    partiallyReliable_(message.partiallyReliable_),
-    upgradeWebsocket_(message.upgradeWebsocket_) {
+HTTPMessage::HTTPMessage(HTTPMessage&& message) noexcept
+    : startTime_(message.startTime_),
+      dstAddress_(std::move(message.dstAddress_)),
+      dstIP_(std::move(message.dstIP_)),
+      dstPort_(message.dstPort_),
+      localIP_(std::move(message.localIP_)),
+      versionStr_(std::move(message.versionStr_)),
+      fields_(std::move(message.fields_)),
+      cookies_(std::move(message.cookies_)),
+      queryParams_(std::move(message.queryParams_)),
+      headers_(std::move(message.headers_)),
+      strippedPerHopHeaders_(std::move(message.strippedPerHopHeaders_)),
+      upgradeWebsocket_(message.upgradeWebsocket_),
+      trailers_(std::move(message.trailers_)),
+      seqNo_(message.seqNo_),
+      sslVersion_(message.sslVersion_),
+      sslCipher_(message.sslCipher_),
+      protoStr_(message.protoStr_),
+      pri_(message.pri_),
+      incremental_(message.incremental_),
+      h2Pri_(message.h2Pri_),
+      version_(message.version_),
+      parsedCookies_(message.parsedCookies_),
+      parsedQueryParams_(message.parsedQueryParams_),
+      chunked_(message.chunked_),
+      upgraded_(message.upgraded_),
+      wantsKeepalive_(message.wantsKeepalive_),
+      trailersAllowed_(message.trailersAllowed_),
+      secure_(message.secure_),
+      partiallyReliable_(message.partiallyReliable_) {
+  if (isRequest()) {
+    setURL(request().url_);
+  }
 }
 
 HTTPMessage& HTTPMessage::operator=(const HTTPMessage& message) {
@@ -154,15 +170,24 @@ HTTPMessage& HTTPMessage::operator=(const HTTPMessage& message) {
   localIP_ = message.localIP_;
   versionStr_ = message.versionStr_;
   fields_ = message.fields_;
+  if (isRequest()) {
+    setURL(request().url_);
+  }
   cookies_ = message.cookies_;
   queryParams_ = message.queryParams_;
   version_ = message.version_;
   headers_ = message.headers_;
-  strippedPerHopHeaders_ = message.strippedPerHopHeaders_;
+  if (message.strippedPerHopHeaders_) {
+    strippedPerHopHeaders_ =
+        std::make_unique<HTTPHeaders>(*message.strippedPerHopHeaders_);
+  } else {
+    strippedPerHopHeaders_.reset();
+  }
   sslVersion_ = message.sslVersion_;
   sslCipher_ = message.sslCipher_;
   protoStr_ = message.protoStr_;
   pri_ = message.pri_;
+  incremental_ = message.incremental_;
   h2Pri_ = message.h2Pri_;
   parsedCookies_ = message.parsedCookies_;
   parsedQueryParams_ = message.parsedQueryParams_;
@@ -193,6 +218,9 @@ HTTPMessage& HTTPMessage::operator=(HTTPMessage&& message) {
   localIP_ = std::move(message.localIP_);
   versionStr_ = std::move(message.versionStr_);
   fields_ = std::move(message.fields_);
+  if (isRequest()) {
+    setURL(request().url_);
+  }
   cookies_ = std::move(message.cookies_);
   queryParams_ = std::move(message.queryParams_);
   version_ = message.version_;
@@ -202,6 +230,7 @@ HTTPMessage& HTTPMessage::operator=(HTTPMessage&& message) {
   sslCipher_ = message.sslCipher_;
   protoStr_ = message.protoStr_;
   pri_ = message.pri_;
+  incremental_ = message.incremental_;
   h2Pri_ = message.h2Pri_;
   parsedCookies_ = message.parsedCookies_;
   parsedQueryParams_ = message.parsedQueryParams_;
@@ -211,7 +240,6 @@ HTTPMessage& HTTPMessage::operator=(HTTPMessage&& message) {
   trailersAllowed_ = message.trailersAllowed_;
   secure_ = message.secure_;
   upgradeWebsocket_ = message.upgradeWebsocket_;
-
   trailers_ = std::move(message.trailers_);
   return *this;
 }
@@ -228,10 +256,12 @@ void HTTPMessage::setMethod(folly::StringPiece method) {
   if (result) {
     req.method_ = *result;
   } else {
-    req.method_ = method.str();
-    auto& storedMethod = boost::get<std::string>(req.method_);
-    std::transform(storedMethod.begin(), storedMethod.end(),
-                   storedMethod.begin(), ::toupper);
+    req.method_ = std::make_unique<std::string>(method.str());
+    auto& storedMethod = *boost::get<std::unique_ptr<std::string>>(req.method_);
+    std::transform(storedMethod.begin(),
+                   storedMethod.end(),
+                   storedMethod.begin(),
+                   ::toupper);
   }
 }
 
@@ -249,7 +279,7 @@ folly::Optional<HTTPMethod> HTTPMessage::getMethod() const {
 const std::string& HTTPMessage::getMethodString() const {
   const auto& req = request();
   if (req.method_.which() == 1) {
-    return boost::get<std::string>(req.method_);
+    return *boost::get<std::unique_ptr<std::string>>(req.method_);
   } else if (req.method_.which() == 2) {
     return methodToString(boost::get<HTTPMethod>(req.method_));
   }
@@ -259,7 +289,15 @@ const std::string& HTTPMessage::getMethodString() const {
 void HTTPMessage::setHTTPVersion(uint8_t maj, uint8_t min) {
   version_.first = maj;
   version_.second = min;
-  versionStr_ = folly::to<string>(maj, ".", min);
+  if (version_.first >= 10 || version_.second >= 10) {
+    versionStr_ = folly::to<std::string>(maj, '.', min);
+  } else {
+    versionStr_.reserve(3);
+    versionStr_.clear();
+    versionStr_.append(1, maj + '0');
+    versionStr_.append(1, '.');
+    versionStr_.append(1, min + '0');
+  }
 }
 
 const pair<uint8_t, uint8_t>& HTTPMessage::getHTTPVersion() const {
@@ -267,13 +305,13 @@ const pair<uint8_t, uint8_t>& HTTPMessage::getHTTPVersion() const {
 }
 
 int HTTPMessage::processMaxForwards() {
-  if (getMethod() == HTTPMethod::TRACE || getMethod()  == HTTPMethod::OPTIONS) {
+  if (getMethod() == HTTPMethod::TRACE || getMethod() == HTTPMethod::OPTIONS) {
     const string& value = headers_.getSingleOrEmpty(HTTP_HEADER_MAX_FORWARDS);
     if (value.length() > 0) {
       int64_t max_forwards = 0;
       try {
         max_forwards = folly::to<int64_t>(value);
-      } catch (const std::range_error& ex) {
+      } catch (const std::range_error&) {
         return 400;
       }
 
@@ -304,8 +342,8 @@ struct FormattedDate {
   string date;
 
   string formatDate() {
-    const auto now = std::chrono::system_clock::to_time_t(
-      std::chrono::system_clock::now());
+    const auto now =
+        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
 
     if (now != lastTime) {
       char buff[1024];
@@ -319,7 +357,7 @@ struct FormattedDate {
     return date;
   }
 };
-}
+} // namespace
 
 string HTTPMessage::formatDateHeader() {
   struct DateTag {};
@@ -331,7 +369,8 @@ void HTTPMessage::ensureHostHeader() {
   if (!headers_.exists(HTTP_HEADER_HOST)) {
     headers_.add(HTTP_HEADER_HOST,
                  getDstAddress().getFamily() == AF_INET6
-                 ? '[' + getDstIP() + ']' : getDstIP());
+                     ? '[' + getDstIP() + ']'
+                     : getDstIP());
   }
 }
 
@@ -346,30 +385,27 @@ uint16_t HTTPMessage::getStatusCode() const {
 
 void HTTPMessage::setPushStatusCode(uint16_t status) {
   request().pushStatus_ = status;
-  request().pushStatusStr_ = folly::to<string>(status);
 }
 
-const std::string& HTTPMessage::getPushStatusStr() const{
-  return request().pushStatusStr_;
+std::string HTTPMessage::getPushStatusStr() const {
+  return folly::to<string>(request().pushStatus_);
 }
 
-uint16_t HTTPMessage::getPushStatusCode() const{
+uint16_t HTTPMessage::getPushStatusCode() const {
   return request().pushStatus_;
 }
 
-void
-HTTPMessage::constructDirectResponse(const pair<uint8_t,uint8_t>& version,
-                                     const int statusCode,
-                                     const string& statusMsg,
-                                     int contentLength) {
+void HTTPMessage::constructDirectResponse(const pair<uint8_t, uint8_t>& version,
+                                          const int statusCode,
+                                          const string& statusMsg,
+                                          int contentLength) {
   setStatusCode(statusCode);
   setStatusMessage(statusMsg);
   constructDirectResponse(version, contentLength);
 }
 
-void
-HTTPMessage::constructDirectResponse(const pair<uint8_t,uint8_t>& version,
-                                     int contentLength) {
+void HTTPMessage::constructDirectResponse(const pair<uint8_t, uint8_t>& version,
+                                          int contentLength) {
   setHTTPVersion(version.first, version.second);
 
   headers_.set(HTTP_HEADER_CONTENT_LENGTH, folly::to<string>(contentLength));
@@ -385,15 +421,18 @@ void HTTPMessage::parseCookies() const {
   DCHECK(!parsedCookies_);
   parsedCookies_ = true;
 
-  headers_.forEachValueOfHeader(HTTP_HEADER_COOKIE,
-                                [&](const string& headerval) {
-    splitNameValuePieces(headerval, ';', '=',
-        [this](StringPiece cookieName, StringPiece cookieValue) {
-          cookies_.emplace(cookieName, cookieValue);
-        });
+  headers_.forEachValueOfHeader(
+      HTTP_HEADER_COOKIE, [&](const string& headerval) {
+        splitNameValuePieces(
+            headerval,
+            ';',
+            '=',
+            [this](StringPiece cookieName, StringPiece cookieValue) {
+              cookies_.emplace(cookieName, cookieValue);
+            });
 
-    return false; // continue processing "cookie" headers
-  });
+        return false; // continue processing "cookie" headers
+      });
 }
 
 void HTTPMessage::unparseCookies() const {
@@ -402,7 +441,7 @@ void HTTPMessage::unparseCookies() const {
 }
 
 const StringPiece HTTPMessage::getCookie(const string& name) const {
- // clear previous parsed cookies.  They might store raw pointers to a vector
+  // clear previous parsed cookies.  They might store raw pointers to a vector
   // in headers_, which can resize on add()
   // Parse the cookies if we haven't done so yet
   unparseCookies();
@@ -427,19 +466,19 @@ void HTTPMessage::parseQueryParams() const {
     return;
   }
 
-  splitNameValue(req.query_, '&', '=',
-        [this] (string&& paramName, string&& paramValue) {
-
-    auto it = queryParams_.find(paramName);
-    if (it == queryParams_.end()) {
-      queryParams_.emplace(std::move(paramName), std::move(paramValue));
-    } else {
-      // We have some unit tests that make sure we always return the last
-      // value when there are duplicate parameters. I don't think this really
-      // matters, but for now we might as well maintain the same behavior.
-      it->second = std::move(paramValue);
-    }
-  });
+  splitNameValue(
+      req.query_, '&', '=', [this](string&& paramName, string&& paramValue) {
+        auto it = queryParams_.find(paramName);
+        if (it == queryParams_.end()) {
+          queryParams_.emplace(std::move(paramName), std::move(paramValue));
+        } else {
+          // We have some unit tests that make sure we always return the last
+          // value when there are duplicate parameters. I don't think this
+          // really matters, but for now we might as well maintain the same
+          // behavior.
+          it->second = std::move(paramValue);
+        }
+      });
 }
 
 void HTTPMessage::unparseQueryParams() {
@@ -476,7 +515,7 @@ int HTTPMessage::getIntQueryParam(const std::string& name) const {
 int HTTPMessage::getIntQueryParam(const std::string& name, int defval) const {
   try {
     return getIntQueryParam(name);
-  } catch (const std::exception& ex) {
+  } catch (const std::exception&) {
   }
 
   return defval;
@@ -503,16 +542,20 @@ const std::map<std::string, std::string>& HTTPMessage::getQueryParams() const {
 }
 
 bool HTTPMessage::setQueryString(const std::string& query) {
+  return setQueryStringImpl(query, true);
+}
+
+bool HTTPMessage::setQueryStringImpl(const std::string& query, bool unparse) {
   ParseURL u(request().url_);
 
   if (u.valid()) {
     // Recreate the URL by just changing the query string
-    request().url_ = createUrl(u.scheme(),
-                               u.authority(),
-                               u.path(),
-                               query, // new query string
-                               u.fragment());
-    request().query_ = query;
+    setURLImpl(createUrl(u.scheme(),
+                         u.authority(),
+                         u.path(),
+                         query, // new query string
+                         u.fragment()),
+               unparse);
     return true;
   }
 
@@ -531,20 +574,20 @@ bool HTTPMessage::removeQueryParam(const std::string& name) {
     return false;
   }
 
-  auto query = createQueryString(queryParams_, request().query_.length());
-  return setQueryString(query);
+  auto query = createQueryString(queryParams_, request().query_.size());
+  return setQueryStringImpl(query, false);
 }
 
 bool HTTPMessage::setQueryParam(const std::string& name,
-    const std::string& value) {
+                                const std::string& value) {
   // Parse the query parameters if we haven't done so yet
   if (!parsedQueryParams_) {
     parseQueryParams();
   }
 
   queryParams_[name] = value;
-  auto query = createQueryString(queryParams_, request().query_.length());
-  return setQueryString(query);
+  auto query = createQueryString(queryParams_, request().query_.size());
+  return setQueryStringImpl(query, false);
 }
 
 std::string HTTPMessage::createQueryString(
@@ -568,7 +611,7 @@ std::string HTTPMessage::createUrl(const folly::StringPiece scheme,
                                    const folly::StringPiece fragment) {
   std::string url;
   url.reserve(scheme.size() + authority.size() + path.size() + query.size() +
-                 fragment.size() + 5); // 5 chars for ://,? and #
+              fragment.size() + 5); // 5 chars for ://,? and #
   if (!scheme.empty()) {
     folly::toAppend(scheme.str(), "://", &url);
   }
@@ -584,12 +627,11 @@ std::string HTTPMessage::createUrl(const folly::StringPiece scheme,
 }
 
 void HTTPMessage::splitNameValuePieces(
-        const string& input,
-        char pairDelim,
-        char valueDelim,
-        std::function<void(StringPiece, StringPiece)> callback) {
+    folly::StringPiece sp,
+    char pairDelim,
+    char valueDelim,
+    std::function<void(StringPiece, StringPiece)> callback) {
 
-  StringPiece sp(input);
   while (!sp.empty()) {
     size_t pairDelimPos = sp.find(pairDelim);
     StringPiece keyValue;
@@ -629,10 +671,10 @@ StringPiece HTTPMessage::trim(StringPiece sp) {
 }
 
 void HTTPMessage::splitNameValue(
-        const string& input,
-        char pairDelim,
-        char valueDelim,
-        std::function<void(string&&, string&&)> callback) {
+    folly::StringPiece input,
+    char pairDelim,
+    char valueDelim,
+    std::function<void(string&&, string&&)> callback) {
 
   folly::StringPiece sp(input);
   while (!sp.empty()) {
@@ -681,59 +723,72 @@ void HTTPMessage::dumpMessage(int vlogLevel) const {
 }
 
 void HTTPMessage::describe(std::ostream& os) const {
-  os << ", chunked: " << chunked_
-     << ", upgraded: " << upgraded_
+  os << ", chunked: " << chunked_ << ", upgraded: " << upgraded_
      << ", secure: " << secure_
      << ", partially reliable: " << partiallyReliable_
      << ", Fields for message:" << std::endl;
 
   // Common fields to both requests and responses.
-  std::vector<std::pair<const char*, const std::string*>> fields {{
-      {"local_ip", &localIP_},
-      {"version", &versionStr_},
-      {"dst_ip", &dstIP_},
-      {"dst_port", &dstPort_},
+  std::vector<std::pair<const char*, folly::StringPiece>> fields{{
+      {"local_ip", localIP_},
+      {"version", versionStr_},
+      {"dst_ip", dstIP_},
+      {"dst_port", dstPort_},
   }};
 
-  if (fields_.type() == typeid(Request)) {
+  std::string pushStatusMessage;
+  if (isRequest()) {
     // Request fields.
     const Request& req = request();
-    fields.push_back(make_pair("client_ip", &req.clientIP_));
-    fields.push_back(make_pair("client_port", &req.clientPort_));
-    fields.push_back(make_pair("method", &getMethodString()));
-    fields.push_back(make_pair("path", &req.path_));
-    fields.push_back(make_pair("query", &req.query_));
-    fields.push_back(make_pair("url", &req.url_));
-    fields.push_back(make_pair("push_status", &req.pushStatusStr_));
-  } else if (fields_.type() == typeid(Response)) {
+    pushStatusMessage = getPushStatusStr();
+    fields.insert(fields.end(),
+                  {{"client_ip",
+                    req.clientIPPort_ ? req.clientIPPort_->ip : empty_string},
+                   {"client_port",
+                    req.clientIPPort_ ? req.clientIPPort_->port : empty_string},
+                   {"method", getMethodString()},
+                   {"path", req.path_},
+                   {"query", req.query_},
+                   {"url", req.url_},
+                   {"push_status", pushStatusMessage}});
+
+  } else if (isResponse()) {
     // Response fields.
     const Response& resp = response();
-    fields.push_back(make_pair("status", &resp.statusStr_));
-    fields.push_back(make_pair("status_msg", &resp.statusMsg_));
+    fields.insert(
+        fields.end(),
+        {{"status", resp.statusStr_}, {"status_msg", resp.statusMsg_}});
   }
 
-  for (auto field : fields) {
-    if (!field.second->empty()) {
-      os << " " << field.first
-         << ":" << stripCntrlChars(*field.second) << std::endl;
+  for (auto& field : fields) {
+    if (!field.second.empty()) {
+      os << " " << field.first << ":" << stripCntrlChars(field.second)
+         << std::endl;
     }
   }
 
-  headers_.forEach([&] (const string& h, const string& v) {
-      os << " " << stripCntrlChars(h) << ": "
-         << stripCntrlChars(v) << std::endl;
+  // This little loop prints the headers and (if present) any per-hop headers
+  // that were stripped.  It executes at most twice.
+  bool first = true;
+  const HTTPHeaders* hdrs = &headers_;
+  while (hdrs) {
+    if (!first && hdrs->size() != 0) {
+      os << "Per-Hop Headers" << std::endl;
+    }
+    hdrs->forEach([&os](const string& h, const string& v) {
+      os << " " << stripCntrlChars(h) << ": " << stripCntrlChars(v)
+         << std::endl;
     });
-  if (strippedPerHopHeaders_.size() > 0) {
-    os << "Per-Hop Headers" << std::endl;
-    strippedPerHopHeaders_.forEach([&] (const string& h, const string& v) {
-        os << " " << stripCntrlChars(h) << ": "
-           << stripCntrlChars(v) << std::endl;
-      });
+    if (first) {
+      hdrs = strippedPerHopHeaders_.get();
+      first = false;
+    } else {
+      hdrs = nullptr;
+    }
   }
 }
 
-void
-HTTPMessage::atomicDumpMessage(int vlogLevel) const {
+void HTTPMessage::atomicDumpMessage(int vlogLevel) const {
   std::lock_guard<std::mutex> g(mutexDump_);
   dumpMessage(vlogLevel);
 }
@@ -767,17 +822,18 @@ bool HTTPMessage::computeKeepalive() const {
 
   const std::string kKeepAliveConnToken = "keep-alive";
   if (version_ == kHTTPVersion10) {
-      // HTTP 1.0 persistent connections require a Connection: Keep-Alive
-      // header to be present for the connection to be persistent.
-      if (checkForHeaderToken(
-              HTTP_HEADER_CONNECTION, kKeepAliveConnToken.c_str(), false) ||
-          doHeaderTokenCheck(strippedPerHopHeaders_,
-                             HTTP_HEADER_CONNECTION,
-                             kKeepAliveConnToken.c_str(),
-                             false)) {
-        return true;
-      }
-      return false;
+    // HTTP 1.0 persistent connections require a Connection: Keep-Alive
+    // header to be present for the connection to be persistent.
+    if (checkForHeaderToken(
+            HTTP_HEADER_CONNECTION, kKeepAliveConnToken.c_str(), false) ||
+        (strippedPerHopHeaders_ &&
+         doHeaderTokenCheck(*strippedPerHopHeaders_,
+                            HTTP_HEADER_CONNECTION,
+                            kKeepAliveConnToken.c_str(),
+                            false))) {
+      return true;
+    }
+    return false;
   }
 
   // It's a keepalive connection.
@@ -794,139 +850,107 @@ bool HTTPMessage::doHeaderTokenCheck(const HTTPHeaders& headers,
                                      const HTTPHeaderCode headerCode,
                                      char const* token,
                                      bool caseSensitive) const {
-  StringPiece tokenPiece(token);
-  string lowerToken;
-  if (!caseSensitive) {
-    lowerToken = token;
-    boost::to_lower(lowerToken, defaultLocale);
-    tokenPiece.reset(lowerToken);
-  }
-
-  // Search through all of the headers with this name.
-  // forEachValueOfHeader will return true iff it was "broken" prematurely
-  // with "return true" in the lambda-function
-  return headers.forEachValueOfHeader(headerCode, [&] (const string& value) {
-    string lower;
-    // Use StringPiece, since it implements a faster find() than std::string
-    StringPiece headerValue;
-    if (caseSensitive) {
-      headerValue.reset(value);
-    } else {
-      // TODO: We only perform ASCII lowering right now.  Technically the
-      // headers could contain data in other encodings, if encoded according
-      // to RFC 2047 (encoded strings will start with "=?").
-      lower = value;
-      boost::to_lower(lower, defaultLocale);
-      headerValue.reset(lower);
-    }
-
-    // Look for the specified token
-    size_t idx = 0;
-    size_t end = headerValue.size();
-    while (idx < end) {
-      idx = headerValue.find(tokenPiece, idx);
-      if (idx == string::npos) {
-        break;
-      }
-
-      // Search backwards to make sure we found the value at the beginning
-      // of a token.
-      bool at_token_start = false;
-      size_t prev = idx;
-      while (true) {
-        if (prev == 0) {
-          at_token_start = true;
-          break;
+  return headers.forEachValueOfHeader(headerCode, [&](const string& value) {
+    std::vector<folly::StringPiece> tokens;
+    folly::split(",", value, tokens);
+    for (auto t : tokens) {
+      t = trim(t);
+      if (caseSensitive) {
+        if (t == token) {
+          return true;
         }
-        --prev;
-        char c = headerValue[prev];
-        if (c == ',') {
-          at_token_start = true;
-          break;
-        }
-        if (!isLWS(c)) {
-          // not at a token start
-          break;
-        }
-      }
-      if (!at_token_start) {
-        idx += 1;
-        continue;
-      }
-
-      // Search forwards to see if we found the value at the end of a token
-      bool at_token_end = false;
-      size_t next = idx + tokenPiece.size();
-      while (true) {
-        if (next >= end) {
-          at_token_end = true;
-          break;
-        }
-        char c = headerValue[next];
-        if (c == ',') {
-          at_token_end = true;
-          break;
-        }
-        if (!isLWS(c)) {
-          // not at a token end
-          break;
-        }
-        ++next;
-      }
-      if (at_token_end) {
-        // We found the token we're looking for
+      } else if (caseInsensitiveEqual(t, token)) {
         return true;
       }
-
-      idx += 1;
     }
-    return false; // keep processing
+    return false;
   });
 }
 
 const char* HTTPMessage::getDefaultReason(uint16_t status) {
   switch (status) {
-    case 100: return "Continue";
-    case 101: return "Switching Protocols";
-    case 200: return "OK";
-    case 201: return "Created";
-    case 202: return "Accepted";
-    case 203: return "Non-Authoritative Information";
-    case 204: return "No Content";
-    case 205: return "Reset Content";
-    case 206: return "Partial Content";
-    case 300: return "Multiple Choices";
-    case 301: return "Moved Permanently";
-    case 302: return "Found";
-    case 303: return "See Other";
-    case 304: return "Not Modified";
-    case 305: return "Use Proxy";
-    case 307: return "Temporary Redirect";
-    case 400: return "Bad Request";
-    case 401: return "Unauthorized";
-    case 402: return "Payment Required";
-    case 403: return "Forbidden";
-    case 404: return "Not Found";
-    case 405: return "Method Not Allowed";
-    case 406: return "Not Acceptable";
-    case 407: return "Proxy Authentication Required";
-    case 408: return "Request Timeout";
-    case 409: return "Conflict";
-    case 410: return "Gone";
-    case 411: return "Length Required";
-    case 412: return "Precondition Failed";
-    case 413: return "Request Entity Too Large";
-    case 414: return "Request-URI Too Long";
-    case 415: return "Unsupported Media Type";
-    case 416: return "Requested Range Not Satisfiable";
-    case 417: return "Expectation Failed";
-    case 418: return "I'm a teapot";
-    case 500: return "Internal Server Error";
-    case 501: return "Not Implemented";
-    case 502: return "Bad Gateway";
-    case 503: return "Service Unavailable";
-    case 504: return "Gateway Timeout";
-    case 505: return "HTTP Version Not Supported";
+    case 100:
+      return "Continue";
+    case 101:
+      return "Switching Protocols";
+    case 200:
+      return "OK";
+    case 201:
+      return "Created";
+    case 202:
+      return "Accepted";
+    case 203:
+      return "Non-Authoritative Information";
+    case 204:
+      return "No Content";
+    case 205:
+      return "Reset Content";
+    case 206:
+      return "Partial Content";
+    case 300:
+      return "Multiple Choices";
+    case 301:
+      return "Moved Permanently";
+    case 302:
+      return "Found";
+    case 303:
+      return "See Other";
+    case 304:
+      return "Not Modified";
+    case 305:
+      return "Use Proxy";
+    case 307:
+      return "Temporary Redirect";
+    case 400:
+      return "Bad Request";
+    case 401:
+      return "Unauthorized";
+    case 402:
+      return "Payment Required";
+    case 403:
+      return "Forbidden";
+    case 404:
+      return "Not Found";
+    case 405:
+      return "Method Not Allowed";
+    case 406:
+      return "Not Acceptable";
+    case 407:
+      return "Proxy Authentication Required";
+    case 408:
+      return "Request Timeout";
+    case 409:
+      return "Conflict";
+    case 410:
+      return "Gone";
+    case 411:
+      return "Length Required";
+    case 412:
+      return "Precondition Failed";
+    case 413:
+      return "Request Entity Too Large";
+    case 414:
+      return "Request-URI Too Long";
+    case 415:
+      return "Unsupported Media Type";
+    case 416:
+      return "Requested Range Not Satisfiable";
+    case 417:
+      return "Expectation Failed";
+    case 418:
+      return "I'm a teapot";
+    case 500:
+      return "Internal Server Error";
+    case 501:
+      return "Not Implemented";
+    case 502:
+      return "Bad Gateway";
+    case 503:
+      return "Service Unavailable";
+    case 504:
+      return "Gateway Timeout";
+    case 505:
+      return "HTTP Version Not Supported";
   }
 
   // Note: Some Microsoft clients behave badly if the reason string
@@ -934,4 +958,24 @@ const char* HTTPMessage::getDefaultReason(uint16_t status) {
   return "-";
 }
 
-} // proxygen
+ParseURL HTTPMessage::setURLImplInternal(bool unparse) {
+  auto& req = request();
+  ParseURL u(req.url_);
+  if (u.valid()) {
+    VLOG(9) << "set path: " << u.path() << " query:" << u.query();
+    req.path_ = u.path();
+    req.query_ = u.query();
+  } else {
+    VLOG(4) << "Error in parsing URL: " << req.url_;
+    req.path_.clear();
+    req.query_.clear();
+  }
+  req.pathStr_.reset();
+  req.queryStr_.reset();
+  if (unparse) {
+    unparseQueryParams();
+  }
+  return u;
+}
+
+} // namespace proxygen

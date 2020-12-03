@@ -1,17 +1,16 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <cstdint>
-#include <string>
 #include <proxygen/lib/http/codec/ErrorCode.h>
+#include <string>
 
 namespace proxygen { namespace http2 {
 
@@ -53,4 +52,4 @@ extern const std::string kProtocolExperimentalString;
 extern const std::string kProtocolCleartextString;
 extern const std::string kProtocolSettingsHeader;
 
-}}
+}} // namespace proxygen::http2

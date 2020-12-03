@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/SocketAddress.h>
@@ -79,8 +78,7 @@ class SessionPoolFixture
   }
 
   HTTPUpstreamSession* makeSession(std::unique_ptr<HTTPCodec> codec) {
-    auto sock =
-        folly::AsyncTransportWrapper::UniquePtr(new TestAsyncTransport(&evb_));
+    auto sock = folly::AsyncTransport::UniquePtr(new TestAsyncTransport(&evb_));
     wangle::TransportInfo tinfo;
     tinfo.acceptTime = getCurrentTime();
     return new HTTPUpstreamSession(timeouts_.get(),

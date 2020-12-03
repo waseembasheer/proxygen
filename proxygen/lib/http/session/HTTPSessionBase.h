@@ -1,16 +1,16 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <fizz/record/Types.h>
 #include <folly/io/IOBuf.h>
+#include <folly/io/async/AsyncUDPSocket.h>
 #include <folly/io/async/SSLContext.h>
 #include <proxygen/lib/http/codec/HTTPCodecFilter.h>
 #include <proxygen/lib/http/session/HTTPTransaction.h>
@@ -34,8 +34,6 @@ class HTTPPriorityMapFactoryProvider {
 
 class HTTPSessionBase : public wangle::ManagedConnection {
  public:
-  enum class SessionType { HTTP, HQ };
-
   /**
    * Optional callback interface that the HTTPSessionBase
    * notifies of connection lifecycle events.
@@ -59,6 +57,20 @@ class HTTPSessionBase : public wangle::ManagedConnection {
     virtual void onIngressEOF() {
     }
     virtual void onRead(const HTTPSessionBase&, size_t /*bytesRead*/) {
+    }
+    /**
+     * New version of the API.  Includes the stream these bytes belong to,
+     * or HTTPCodec::NoStream if unknown.  bytesRead can be 0 if the stream
+     * ended.
+     *
+     * If onRead is currently implemented with the old signature (without stream
+     * ID), safest path is to keep it and change it to call onRead with the new
+     * signature that includes the stream ID with folly::none as the Stream ID.
+     */
+    virtual void onRead(const HTTPSessionBase& sess,
+                        size_t bytesRead,
+                        folly::Optional<HTTPCodec::StreamID> /*stream id*/) {
+      onRead(sess, bytesRead);
     }
     virtual void onWrite(const HTTPSessionBase&, size_t /*bytesWritten*/) {
     }
@@ -108,7 +120,7 @@ class HTTPSessionBase : public wangle::ManagedConnection {
                   const wangle::TransportInfo& tinfo,
                   InfoCallback* infoCallback,
                   std::unique_ptr<HTTPCodec> codec,
-                  const WheelTimerInstance& timeout,
+                  const WheelTimerInstance& wheelTimer,
                   HTTPCodec::StreamID rootNodeId);
 
   virtual ~HTTPSessionBase() {
@@ -154,11 +166,11 @@ class HTTPSessionBase : public wangle::ManagedConnection {
     sessionStats_ = stats;
   }
 
-  virtual SessionType getType() const noexcept = 0;
+  virtual HTTPTransaction::Transport::Type getType() const noexcept = 0;
 
-  virtual folly::AsyncTransportWrapper* getTransport() = 0;
+  virtual folly::AsyncTransport* getTransport() = 0;
 
-  virtual const folly::AsyncTransportWrapper* getTransport() const = 0;
+  virtual const folly::AsyncTransport* getTransport() const = 0;
 
   virtual folly::EventBase* getEventBase() const = 0;
 
@@ -178,6 +190,8 @@ class HTTPSessionBase : public wangle::ManagedConnection {
     return (getNumOutgoingStreams() < getMaxConcurrentOutgoingStreams());
   }
 
+  virtual uint32_t getNumStreams() const = 0;
+
   virtual uint32_t getNumOutgoingStreams() const = 0;
 
   // SimpleSessionPool
@@ -194,7 +208,7 @@ class HTTPSessionBase : public wangle::ManagedConnection {
                     getMaxConcurrentOutgoingStreamsRemote());
   }
 
-  HTTPSessionController* getController() {
+  HTTPSessionController* getController() const {
     return controller_;
   }
 
@@ -341,10 +355,10 @@ class HTTPSessionBase : public wangle::ManagedConnection {
   }
 
   // public HTTPTransaction::Transport overrides
-  const folly::SocketAddress& getLocalAddress() const noexcept /*override*/ {
+  virtual const folly::SocketAddress& getLocalAddress() const noexcept {
     return localAddr_;
   }
-  const folly::SocketAddress& getPeerAddress() const noexcept /*override*/ {
+  virtual const folly::SocketAddress& getPeerAddress() const noexcept {
     return peerAddr_;
   }
   const wangle::TransportInfo& getSetupTransportInfo() const noexcept
@@ -364,6 +378,10 @@ class HTTPSessionBase : public wangle::ManagedConnection {
 
   wangle::TransportInfo& getSetupTransportInfo() noexcept {
     return transportInfo_;
+  }
+
+  virtual void onNetworkSwitch(
+      std::unique_ptr<folly::AsyncUDPSocket>) noexcept {
   }
 
   /**
@@ -424,7 +442,7 @@ class HTTPSessionBase : public wangle::ManagedConnection {
 
   virtual void attachThreadLocals(folly::EventBase* eventBase,
                                   folly::SSLContextPtr sslContext,
-                                  const WheelTimerInstance& timeout,
+                                  const WheelTimerInstance& wheelTimer,
                                   HTTPSessionStats* stats,
                                   FilterIteratorFn fn,
                                   HeaderCodec::Stats* headerCodecStats,
@@ -474,6 +492,25 @@ class HTTPSessionBase : public wangle::ManagedConnection {
     return exHeadersEnabled_;
   }
 
+  virtual void injectTraceEventIntoAllTransactions(TraceEvent&) = 0;
+
+  void setConnectionToken(
+      const HTTPTransaction::ConnectionToken& token) noexcept {
+    connectionToken_ = token;
+  }
+
+  // Use the protocol's ping feature to test liveness of the peer.  Send a ping
+  // every interval seconds.  If the ping is not returned by timeout, drop the
+  // connection.
+  // If extendIntervalOnIngress is true, then any ingress data will reset the
+  // timer until the next PING.
+  // If immediate is true, send a ping immediately.  Otherwise, wait one
+  // interval.
+  virtual void enablePingProbes(std::chrono::seconds interval,
+                                std::chrono::seconds timeout,
+                                bool extendIntervalOnIngress,
+                                bool immediate = false) = 0;
+
  protected:
   bool notifyEgressBodyBuffered(int64_t bytes, bool update);
 
@@ -483,9 +520,9 @@ class HTTPSessionBase : public wangle::ManagedConnection {
 
   virtual void pauseTransactions() = 0;
 
-  void resumeTransactions();
+  virtual void resumeTransactions();
 
-  void setNewTransactionPauseState(HTTPTransaction* txn);
+  virtual void setNewTransactionPauseState(HTTPTransaction* txn) = 0;
 
   /**
    * Install a direct response handler for the transaction based on the
@@ -557,9 +594,14 @@ class HTTPSessionBase : public wangle::ManagedConnection {
   void initCodecHeaderIndexingStrategy();
 
   /**
-   * Attaches Session to RevproxyController instance if it's set
+   * Attaches session to HTTPSessionController.
    */
   void attachToSessionController();
+
+  /**
+   * Informs HTTPSessionController that transport is ready.
+   */
+  void informSessionControllerTransportReady();
 
   HTTPSessionStats* sessionStats_{nullptr};
 
@@ -574,8 +616,11 @@ class HTTPSessionBase : public wangle::ManagedConnection {
   /**
    * Maximum number of ingress body bytes that can be buffered across all
    * transactions for this single session/connection.
+   * While changing this value from multiple threads is supported,
+   * it is not correct since a thread can use a value changed by another thread
+   * We should change the code to avoid this
    */
-  static uint32_t kDefaultReadBufLimit;
+  static std::atomic<uint32_t> kDefaultReadBufLimit;
 
   /**
    * The maximum size of the read buffer from the socket.
@@ -599,6 +644,11 @@ class HTTPSessionBase : public wangle::ManagedConnection {
   /** Address of the remote end of the connection */
   folly::SocketAddress peerAddr_;
 
+  /**
+   * Optional connection token associated with this session.
+   */
+  folly::Optional<HTTPTransaction::ConnectionToken> connectionToken_;
+
  private:
   // Underlying controller_ is marked as private so that callers must utilize
   // getController/setController protected methods.  This ensures we have a
@@ -612,14 +662,6 @@ class HTTPSessionBase : public wangle::ManagedConnection {
     } else {
       return std::chrono::milliseconds(0);
     }
-  }
-
-  /**
-   * Returns true iff egress should stop on this session.
-   */
-  bool egressLimitExceeded() const {
-    // Changed to >
-    return pendingWriteSize_ > writeBufLimit_;
   }
 
   /**
@@ -681,8 +723,6 @@ class HTTPSessionBase : public wangle::ManagedConnection {
 
   bool prioritySample_ : 1;
   bool h2PrioritiesEnabled_ : 1;
-  bool inResume_ : 1;
-  bool pendingPause_ : 1;
 
   /**
    * Indicates whether Ex Headers is supported in HTTPSession

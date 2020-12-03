@@ -1,16 +1,15 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
-#include <string>
-#include <boost/algorithm/string/split.hpp>
-#include <boost/algorithm/string.hpp>
+
 #include <proxygen/httpserver/samples/hq/SampleHandlers.h>
+#include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string/split.hpp>
+#include <string>
 
 namespace quic { namespace samples {
 
@@ -87,16 +86,6 @@ void WaitReleaseHandler::maybeCleanup() {
 
 class ServerPushHandler;
 
-std::string gPushResponseBody;
-
-ServerPushHandler::ServerPushHandler(const std::string& version)
-    : BaseQuicHandler(version) {
-  if (gPushResponseBody.empty()) {
-    CHECK(folly::readFile(kPushFileName, gPushResponseBody))
-        << "Failed to read push file=" << kPushFileName;
-  }
-}
-
 void ServerPushHandler::onHeadersComplete(
     std::unique_ptr<proxygen::HTTPMessage> msg) noexcept {
   VLOG(10) << "ServerPushHandler::" << __func__;
@@ -109,12 +98,15 @@ void ServerPushHandler::onHeadersComplete(
     return;
   }
 
-  VLOG(2) << "Received GET request for " << msg->getPath() << " at: "
+  VLOG(2) << "Received GET request for " << path_ << " at: "
           << std::chrono::duration_cast<std::chrono::microseconds>(
-              std::chrono::steady_clock::now().time_since_epoch()).count();
+                 std::chrono::steady_clock::now().time_since_epoch())
+                 .count();
 
+  std::string gPushResponseBody;
   std::vector<std::string> pathPieces;
-  boost::split(pathPieces, msg->getPath(), boost::is_any_of("/"));
+  std::string path = path_;
+  boost::split(pathPieces, path, boost::is_any_of("/"));
   int responseSize = 0;
   int numResponses = 1;
 
@@ -137,11 +129,16 @@ void ServerPushHandler::onHeadersComplete(
     VLOG(2) << "Sending push txn " << i << "/" << numResponses;
 
     // Create a URL for the pushed resource
-    auto pushedResourceUrl = folly::to<std::string>(
-        msg->getURL(), "/", "pushed", i);
+    auto pushedResourceUrl =
+        folly::to<std::string>(msg->getURL(), "/", "pushed", i);
 
     // Create a pushed transaction and handler
     auto pushedTxn = txn_->newPushedTransaction(&pushTxnHandler_);
+
+    if (!pushedTxn) {
+      LOG(ERROR) << "Could not create push txn; stop pushing";
+      break;
+    }
 
     // Send a promise for the pushed resource
     sendPushPromise(pushedTxn, pushedResourceUrl);
@@ -149,7 +146,6 @@ void ServerPushHandler::onHeadersComplete(
     // Send the push response
     sendPushResponse(
         pushedTxn, pushedResourceUrl, gPushResponseBody, true /* eom */);
-
   }
 
   // Send the response to the original get request
@@ -163,14 +159,14 @@ void ServerPushHandler::sendPushPromise(proxygen::HTTPTransaction* txn,
   proxygen::HTTPMessage promise;
   promise.setMethod("GET");
   promise.setURL(pushedResourceUrl);
-  promise.setVersionString(version_);
+  promise.setVersionString(getHttpVersion());
   promise.setIsChunked(true);
-
   txn->sendHeaders(promise);
 
   VLOG(2) << "Sent push promise for " << pushedResourceUrl << " at: "
           << std::chrono::duration_cast<std::chrono::microseconds>(
-              std::chrono::steady_clock::now().time_since_epoch()).count();
+                 std::chrono::steady_clock::now().time_since_epoch())
+                 .count();
 }
 
 void ServerPushHandler::sendPushResponse(proxygen::HTTPTransaction* pushTxn,
@@ -179,33 +175,35 @@ void ServerPushHandler::sendPushResponse(proxygen::HTTPTransaction* pushTxn,
                                          bool eom) {
   VLOG(10) << "ServerPushHandler::" << __func__;
   proxygen::HTTPMessage resp;
-  resp.setVersionString(version_);
+  resp.setVersionString(getHttpVersion());
   resp.setStatusCode(200);
   resp.setStatusMessage("OK");
   resp.setWantsKeepalive(true);
   resp.setIsChunked(true);
-
   pushTxn->sendHeaders(resp);
 
   std::string responseStr =
-    "I AM THE PUSHED RESPONSE AND I AM NOT RESPONSIBLE: " + pushedResourceBody;
+      "I AM THE PUSHED RESPONSE AND I AM NOT RESPONSIBLE: " +
+      pushedResourceBody;
   pushTxn->sendBody(folly::IOBuf::copyBuffer(responseStr));
 
   VLOG(2) << "Sent push response for " << pushedResourceUrl << " at: "
           << std::chrono::duration_cast<std::chrono::microseconds>(
-              std::chrono::steady_clock::now().time_since_epoch()).count();
+                 std::chrono::steady_clock::now().time_since_epoch())
+                 .count();
 
   if (eom) {
     pushTxn->sendEOM();
     VLOG(2) << "Sent EOM for " << pushedResourceUrl << " at: "
             << std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count();
+                   std::chrono::steady_clock::now().time_since_epoch())
+                   .count();
   }
 }
 
 void ServerPushHandler::sendErrorResponse(const std::string& body) {
   proxygen::HTTPMessage resp;
-  resp.setVersionString(version_);
+  resp.setVersionString(getHttpVersion());
   resp.setStatusCode(400);
   resp.setStatusMessage("ERROR");
   resp.setWantsKeepalive(false);
@@ -218,7 +216,7 @@ void ServerPushHandler::sendOkResponse(const std::string& body, bool eom) {
   VLOG(10) << "ServerPushHandler::" << __func__ << ": sending " << body.length()
            << " bytes";
   proxygen::HTTPMessage resp;
-  resp.setVersionString(version_);
+  resp.setVersionString(getHttpVersion());
   resp.setStatusCode(200);
   resp.setStatusMessage("OK");
   resp.setWantsKeepalive(true);

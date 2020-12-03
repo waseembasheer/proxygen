@@ -1,24 +1,23 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <chrono>
 #include <fcntl.h>
 #include <folly/String.h>
-#include <wangle/acceptor/ServerSocketConfig.h>
+#include <folly/io/async/AsyncSocket.h>
 #include <list>
+#include <proxygen/lib/http/codec/HTTPSettings.h>
 #include <string>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <folly/io/async/AsyncSocket.h>
-#include <proxygen/lib/http/codec/HTTPSettings.h>
+#include <wangle/acceptor/ServerSocketConfig.h>
 #include <zlib.h>
 
 namespace proxygen {
@@ -32,15 +31,8 @@ namespace proxygen {
  */
 struct AcceptorConfiguration : public wangle::ServerSocketConfig {
   /**
-   * Determines if the VIP should accept traffic from only internal or
-   * external clients. Internal VIPs have different behavior
-   * (e.g. Via headers, etc).
-   */
-  bool internal{false};
-
-  /**
-  * Determines if connection should respect HTTP2 priorities
-  **/
+   * Determines if connection should respect HTTP2 priorities
+   **/
   bool HTTP2PrioritiesEnabled{true};
 
   /**
@@ -63,6 +55,13 @@ struct AcceptorConfiguration : public wangle::ServerSocketConfig {
    * Comma separated string of protocols that can be upgraded to from HTTP/1.1
    */
   std::list<std::string> allowedPlaintextUpgradeProtocols;
+
+  /**
+   * True if HTTP/1.0 messages should always be serialized as HTTP/1.1
+   *
+   * Maximizes connection re-use
+   */
+  bool forceHTTP1_0_to_1_1{false};
 
   /**
    * HTTP/2 or SPDY settings for this acceptor
@@ -96,6 +95,11 @@ struct AcceptorConfiguration : public wangle::ServerSocketConfig {
    * built-in HTTPSession default (64kb)
    */
   int64_t writeBufferLimit{-1};
+
+  /**
+   * Determines if HTTP2 ping is enabled on connection
+   **/
+  bool HTTP2PingEnabled{false};
 };
 
-} // proxygen
+} // namespace proxygen

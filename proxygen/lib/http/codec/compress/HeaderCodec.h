@@ -1,17 +1,16 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
-#include <memory>
 #include <folly/Expected.h>
 #include <folly/FBString.h>
+#include <memory>
 #include <proxygen/lib/http/HTTPHeaderSize.h>
 #include <proxygen/lib/http/codec/compress/Header.h>
 #include <proxygen/lib/http/codec/compress/HeaderPiece.h>
@@ -19,11 +18,12 @@
 
 namespace folly {
 class IOBuf;
-}
+class IOBufQueue;
+} // namespace folly
 
 namespace folly { namespace io {
 class Cursor;
-}}
+}} // namespace folly::io
 
 namespace proxygen {
 
@@ -36,16 +36,14 @@ class HeaderCodec {
  public:
   const static uint32_t kMaxUncompressed = 128 * 1024;
 
-  enum class Type : uint8_t {
-    GZIP = 0,
-    HPACK = 1,
-    QPACK = 2
-  };
+  enum class Type : uint8_t { GZIP = 0, HPACK = 1, QPACK = 2 };
 
   class Stats {
    public:
-    Stats() {}
-    virtual ~Stats() {}
+    Stats() {
+    }
+    virtual ~Stats() {
+    }
 
     virtual void recordEncode(Type type, HTTPHeaderSize& size) = 0;
     virtual void recordDecode(Type type, HTTPHeaderSize& size) = 0;
@@ -53,8 +51,10 @@ class HeaderCodec {
     virtual void recordDecodeTooLarge(Type type) = 0;
   };
 
-  HeaderCodec() {}
-  virtual ~HeaderCodec() {}
+  HeaderCodec() {
+  }
+  virtual ~HeaderCodec() {
+  }
 
   /**
    * compressed and uncompressed size of the last encode
@@ -86,11 +86,10 @@ class HeaderCodec {
   }
 
  protected:
-
   HTTPHeaderSize encodedSize_;
   uint32_t encodeHeadroom_{0};
   uint64_t maxUncompressed_{kMaxUncompressed};
   Stats* stats_{nullptr};
 };
 
-}
+} // namespace proxygen

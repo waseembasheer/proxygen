@@ -1,18 +1,16 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/HTTPMethod.h>
 
-#include <folly/container/Foreach.h>
 #include <folly/Indestructible.h>
-#include <proxygen/lib/http/HTTPHeaders.h>
 #include <ostream>
+#include <proxygen/lib/http/HTTPHeaders.h>
 #include <vector>
 
 #define HTTP_METHOD_STR(method) #method
@@ -26,18 +24,19 @@ using StringVector = std::vector<std::string>;
 
 const StringVector& getMethodStrings() {
   static const folly::Indestructible<StringVector> methodStrings{
-    StringVector{ HTTP_METHOD_GEN(HTTP_METHOD_STR) }
-  };
+      StringVector{HTTP_METHOD_GEN(HTTP_METHOD_STR)}};
   return *methodStrings;
 }
 
-}
+} // namespace
 
 namespace proxygen {
 
 folly::Optional<HTTPMethod> stringToMethod(folly::StringPiece method) {
-  FOR_EACH_ENUMERATE(index, cur, getMethodStrings()) {
-    if (caseInsensitiveEqual(*cur, method)) {
+  const auto& strings = getMethodStrings();
+  for (size_t index = 0; index < strings.size(); ++index) {
+    const auto& cur = strings[index];
+    if (caseInsensitiveEqual(cur, method)) {
       return HTTPMethod(index);
     }
   }
@@ -48,9 +47,9 @@ const std::string& methodToString(HTTPMethod method) {
   return getMethodStrings()[static_cast<unsigned>(method)];
 }
 
-std::ostream& operator <<(std::ostream& out, HTTPMethod method) {
+std::ostream& operator<<(std::ostream& out, HTTPMethod method) {
   out << methodToString(method);
   return out;
 }
 
-}
+} // namespace proxygen

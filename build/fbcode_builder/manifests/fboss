@@ -15,9 +15,8 @@ builder = nop
 
 [dependencies]
 folly
+fb303
 wangle
-rsocket-cpp
-mstch
 fizz
 fmt
 libsodium
@@ -25,11 +24,15 @@ googletest
 zstd
 fbthrift
 iproute2
-OpenNSL
 libmnl
 libusb
 libcurl
 libnl
+libsai
+OpenNSA
+re2
+python
+yaml-cpp
 
 [shipit.pathmap]
 fbcode/fboss/github = .

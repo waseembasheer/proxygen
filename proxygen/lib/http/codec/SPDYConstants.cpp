@@ -1,89 +1,135 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/codec/SPDYConstants.h>
 
 namespace proxygen { namespace spdy {
 
 GoawayStatusCode errorCodeToGoaway(ErrorCode code) {
   switch (code) {
-    case ErrorCode::NO_ERROR: return GOAWAY_OK;
-    case ErrorCode::INTERNAL_ERROR: return GOAWAY_INTERNAL_ERROR;
-    case ErrorCode::FLOW_CONTROL_ERROR: return GOAWAY_FLOW_CONTROL_ERROR;
-    case ErrorCode::PROTOCOL_ERROR:           break;
-    case ErrorCode::SETTINGS_TIMEOUT:         break;
-    case ErrorCode::STREAM_CLOSED:            break;
-    case ErrorCode::FRAME_SIZE_ERROR:         break;
-    case ErrorCode::REFUSED_STREAM:           break;
-    case ErrorCode::CANCEL:                   break;
-    case ErrorCode::COMPRESSION_ERROR:        break;
-    case ErrorCode::CONNECT_ERROR:            break;
-    case ErrorCode::ENHANCE_YOUR_CALM:        break;
-    case ErrorCode::INADEQUATE_SECURITY:      break;
-    case ErrorCode::HTTP_1_1_REQUIRED:        break;
-    case ErrorCode::_SPDY_INVALID_STREAM:     break;
-    case ErrorCode::_HTTP3_PR_INVALID_OFFSET: break;
+    case ErrorCode::NO_ERROR:
+      return GOAWAY_OK;
+    case ErrorCode::INTERNAL_ERROR:
+      return GOAWAY_INTERNAL_ERROR;
+    case ErrorCode::FLOW_CONTROL_ERROR:
+      return GOAWAY_FLOW_CONTROL_ERROR;
+    case ErrorCode::PROTOCOL_ERROR:
+      break;
+    case ErrorCode::SETTINGS_TIMEOUT:
+      break;
+    case ErrorCode::STREAM_CLOSED:
+      break;
+    case ErrorCode::FRAME_SIZE_ERROR:
+      break;
+    case ErrorCode::REFUSED_STREAM:
+      break;
+    case ErrorCode::CANCEL:
+      break;
+    case ErrorCode::COMPRESSION_ERROR:
+      break;
+    case ErrorCode::CONNECT_ERROR:
+      break;
+    case ErrorCode::ENHANCE_YOUR_CALM:
+      break;
+    case ErrorCode::INADEQUATE_SECURITY:
+      break;
+    case ErrorCode::HTTP_1_1_REQUIRED:
+      break;
+    case ErrorCode::_SPDY_INVALID_STREAM:
+      break;
+    case ErrorCode::_HTTP3_PR_INVALID_OFFSET:
+      break;
   }
   return GOAWAY_PROTOCOL_ERROR;
 }
 
 ResetStatusCode errorCodeToReset(ErrorCode code) {
   switch (code) {
-    case ErrorCode::NO_ERROR: break;
-    case ErrorCode::INTERNAL_ERROR: return RST_INTERNAL_ERROR;
-    case ErrorCode::FLOW_CONTROL_ERROR: return RST_FLOW_CONTROL_ERROR;
-    case ErrorCode::PROTOCOL_ERROR: return RST_PROTOCOL_ERROR;
-    case ErrorCode::SETTINGS_TIMEOUT: break;
-    case ErrorCode::STREAM_CLOSED: return RST_STREAM_ALREADY_CLOSED;
-    case ErrorCode::FRAME_SIZE_ERROR: return RST_FRAME_TOO_LARGE;
-    case ErrorCode::REFUSED_STREAM: return RST_REFUSED_STREAM;
-    case ErrorCode::CANCEL: return RST_CANCEL;
-    case ErrorCode::COMPRESSION_ERROR: return RST_INTERNAL_ERROR;
-    case ErrorCode::CONNECT_ERROR: break;
-    case ErrorCode::ENHANCE_YOUR_CALM: break;
-    case ErrorCode::INADEQUATE_SECURITY: return RST_INVALID_CREDENTIALS;
-    case ErrorCode::HTTP_1_1_REQUIRED: break;
-    case ErrorCode::_HTTP3_PR_INVALID_OFFSET: break;
-    case ErrorCode::_SPDY_INVALID_STREAM: return RST_INVALID_STREAM;
+    case ErrorCode::NO_ERROR:
+      break;
+    case ErrorCode::INTERNAL_ERROR:
+      return RST_INTERNAL_ERROR;
+    case ErrorCode::FLOW_CONTROL_ERROR:
+      return RST_FLOW_CONTROL_ERROR;
+    case ErrorCode::PROTOCOL_ERROR:
+      return RST_PROTOCOL_ERROR;
+    case ErrorCode::SETTINGS_TIMEOUT:
+      break;
+    case ErrorCode::STREAM_CLOSED:
+      return RST_STREAM_ALREADY_CLOSED;
+    case ErrorCode::FRAME_SIZE_ERROR:
+      return RST_FRAME_TOO_LARGE;
+    case ErrorCode::REFUSED_STREAM:
+      return RST_REFUSED_STREAM;
+    case ErrorCode::CANCEL:
+      return RST_CANCEL;
+    case ErrorCode::COMPRESSION_ERROR:
+      return RST_INTERNAL_ERROR;
+    case ErrorCode::CONNECT_ERROR:
+      break;
+    case ErrorCode::ENHANCE_YOUR_CALM:
+      break;
+    case ErrorCode::INADEQUATE_SECURITY:
+      return RST_INVALID_CREDENTIALS;
+    case ErrorCode::HTTP_1_1_REQUIRED:
+      break;
+    case ErrorCode::_HTTP3_PR_INVALID_OFFSET:
+      break;
+    case ErrorCode::_SPDY_INVALID_STREAM:
+      return RST_INVALID_STREAM;
   }
   return RST_PROTOCOL_ERROR;
 }
 
 ErrorCode goawayToErrorCode(GoawayStatusCode code) {
   switch (code) {
-    case GOAWAY_OK: return ErrorCode::NO_ERROR;
-    case GOAWAY_PROTOCOL_ERROR: return ErrorCode::PROTOCOL_ERROR;
-    case GOAWAY_INTERNAL_ERROR: return ErrorCode::INTERNAL_ERROR;
-    case GOAWAY_FLOW_CONTROL_ERROR: return ErrorCode::FLOW_CONTROL_ERROR;
+    case GOAWAY_OK:
+      return ErrorCode::NO_ERROR;
+    case GOAWAY_PROTOCOL_ERROR:
+      return ErrorCode::PROTOCOL_ERROR;
+    case GOAWAY_INTERNAL_ERROR:
+      return ErrorCode::INTERNAL_ERROR;
+    case GOAWAY_FLOW_CONTROL_ERROR:
+      return ErrorCode::FLOW_CONTROL_ERROR;
   }
   return ErrorCode::PROTOCOL_ERROR;
 }
 
 ErrorCode rstToErrorCode(uint32_t code) {
   switch (code) {
-    case RST_PROTOCOL_ERROR: break;
-    case RST_INVALID_STREAM: return ErrorCode::_SPDY_INVALID_STREAM;
-    case RST_REFUSED_STREAM: return ErrorCode::REFUSED_STREAM;
-    case RST_UNSUPPORTED_VERSION: break; // not used anyway
-    case RST_CANCEL: return ErrorCode::CANCEL;
-    case RST_INTERNAL_ERROR: return ErrorCode::INTERNAL_ERROR;
-    case RST_FLOW_CONTROL_ERROR: return ErrorCode::FLOW_CONTROL_ERROR;
-    case RST_STREAM_IN_USE: return ErrorCode::FLOW_CONTROL_ERROR;
-    case RST_STREAM_ALREADY_CLOSED: return ErrorCode::STREAM_CLOSED;
-    case RST_INVALID_CREDENTIALS: return ErrorCode::INADEQUATE_SECURITY;
-    case RST_FRAME_TOO_LARGE: return ErrorCode::FRAME_SIZE_ERROR;
+    case RST_PROTOCOL_ERROR:
+      break;
+    case RST_INVALID_STREAM:
+      return ErrorCode::_SPDY_INVALID_STREAM;
+    case RST_REFUSED_STREAM:
+      return ErrorCode::REFUSED_STREAM;
+    case RST_UNSUPPORTED_VERSION:
+      break; // not used anyway
+    case RST_CANCEL:
+      return ErrorCode::CANCEL;
+    case RST_INTERNAL_ERROR:
+      return ErrorCode::INTERNAL_ERROR;
+    case RST_FLOW_CONTROL_ERROR:
+      return ErrorCode::FLOW_CONTROL_ERROR;
+    case RST_STREAM_IN_USE:
+      return ErrorCode::FLOW_CONTROL_ERROR;
+    case RST_STREAM_ALREADY_CLOSED:
+      return ErrorCode::STREAM_CLOSED;
+    case RST_INVALID_CREDENTIALS:
+      return ErrorCode::INADEQUATE_SECURITY;
+    case RST_FRAME_TOO_LARGE:
+      return ErrorCode::FRAME_SIZE_ERROR;
   }
   return ErrorCode::PROTOCOL_ERROR;
 }
 
 folly::Optional<proxygen::spdy::SettingsId> httpToSpdySettingsId(
-  proxygen::SettingsId id) {
+    proxygen::SettingsId id) {
   switch (id) {
     // no mapping
     case proxygen::SettingsId::HEADER_TABLE_SIZE:
@@ -114,7 +160,6 @@ folly::Optional<proxygen::spdy::SettingsId> httpToSpdySettingsId(
     case proxygen::SettingsId::THRIFT_CHANNEL_ID_DEPRECATED:
     case proxygen::SettingsId::THRIFT_CHANNEL_ID:
       return folly::none;
-    case proxygen::SettingsId::_HQ_NUM_PLACEHOLDERS:
     case proxygen::SettingsId::_HQ_QPACK_BLOCKED_STREAMS:
     case proxygen::SettingsId::SETTINGS_HTTP_CERT_AUTH:
       return folly::none;
@@ -123,7 +168,7 @@ folly::Optional<proxygen::spdy::SettingsId> httpToSpdySettingsId(
 }
 
 folly::Optional<proxygen::SettingsId> spdyToHttpSettingsId(
-  proxygen::spdy::SettingsId id) {
+    proxygen::spdy::SettingsId id) {
   switch (id) {
     case SETTINGS_UPLOAD_BANDWIDTH:
     case SETTINGS_DOWNLOAD_BANDWIDTH:
@@ -176,4 +221,4 @@ const std::string kVersionStrv31("spdy/3.1");
 // appending a frame to gather "entropy".
 const size_t SPDY_PRIO_SHIFT_FACTOR = 2; // up to 60
 
-}}
+}} // namespace proxygen::spdy

@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/lib/http/HTTPMessage.h>
@@ -17,7 +16,8 @@ namespace proxygen {
 
 class HTTPRequestVerifier {
  public:
-  explicit HTTPRequestVerifier() {}
+  explicit HTTPRequestVerifier() {
+  }
 
   void reset(HTTPMessage* msg) {
     msg_ = msg;
@@ -78,18 +78,19 @@ class HTTPRequestVerifier {
     return true;
   }
 
-  bool setAuthority(folly::StringPiece authority) {
+  bool setAuthority(folly::StringPiece authority, bool validate = true) {
     if (hasAuthority_) {
       error = "Duplicate authority";
       return false;
     }
-    if (!CodecUtil::validateHeaderValue(authority, CodecUtil::STRICT)) {
+    if (validate &&
+        !CodecUtil::validateHeaderValue(authority, CodecUtil::STRICT)) {
       error = "Invalid authority";
       return false;
     }
     hasAuthority_ = true;
     assert(msg_ != nullptr);
-    msg_->getHeaders().add(HTTP_HEADER_HOST, authority.str());
+    msg_->getHeaders().add(HTTP_HEADER_HOST, authority);
     return true;
   }
 
@@ -112,13 +113,19 @@ class HTTPRequestVerifier {
            (!hasMethod_ || !hasAuthority_ || hasScheme_ || hasPath_)) ||
           (hasUpgradeProtocol_ && (!hasScheme_ || !hasPath_))) {
         error = folly::to<std::string>("Malformed CONNECT request m/a/s/pa/pr=",
-                                hasMethod_, hasAuthority_,
-                                hasScheme_, hasPath_, hasUpgradeProtocol_);
+                                       hasMethod_,
+                                       hasAuthority_,
+                                       hasScheme_,
+                                       hasPath_,
+                                       hasUpgradeProtocol_);
       }
     } else if (hasUpgradeProtocol_ || !hasMethod_ || !hasScheme_ || !hasPath_) {
       error = folly::to<std::string>("Malformed request m/a/s/pa/pr=",
-                                hasMethod_, hasAuthority_,
-                                hasScheme_, hasPath_, hasUpgradeProtocol_);
+                                     hasMethod_,
+                                     hasAuthority_,
+                                     hasScheme_,
+                                     hasPath_,
+                                     hasUpgradeProtocol_);
     }
     return error.empty();
   }
@@ -162,4 +169,4 @@ class HTTPRequestVerifier {
   bool hasUpgradeProtocol_{false};
 };
 
-} // proxygen
+} // namespace proxygen

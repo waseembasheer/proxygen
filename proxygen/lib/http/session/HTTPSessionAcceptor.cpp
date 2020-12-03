@@ -1,21 +1,18 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/session/HTTPSessionAcceptor.h>
 #include <proxygen/lib/http/codec/HTTP1xCodec.h>
 #include <proxygen/lib/http/codec/HTTP2Codec.h>
 #include <proxygen/lib/http/session/HTTPDefaultSessionCodecFactory.h>
 #include <proxygen/lib/http/session/HTTPDirectResponseHandler.h>
 
-using folly::AsyncSocket;
 using folly::SocketAddress;
-using std::list;
 using std::string;
 using std::unique_ptr;
 
@@ -45,23 +42,17 @@ HTTPSessionAcceptor::~HTTPSessionAcceptor() {
 const HTTPErrorPage* HTTPSessionAcceptor::getErrorPage(
     const SocketAddress& addr) const {
   const HTTPErrorPage* errorPage = nullptr;
-  if (isInternal()) {
-    if (addr.isPrivateAddress()) {
-      errorPage = diagnosticErrorPage_.get();
-    }
-  }
   if (errorPage == nullptr) {
     errorPage = defaultErrorPage_.get();
   }
   return errorPage;
 }
 
-void HTTPSessionAcceptor::onNewConnection(
-    folly::AsyncTransportWrapper::UniquePtr sock,
-    const SocketAddress* peerAddress,
-    const string& nextProtocol,
-    wangle::SecureTransportType,
-    const wangle::TransportInfo& tinfo) {
+void HTTPSessionAcceptor::onNewConnection(folly::AsyncTransport::UniquePtr sock,
+                                          const SocketAddress* peerAddress,
+                                          const string& nextProtocol,
+                                          wangle::SecureTransportType,
+                                          const wangle::TransportInfo& tinfo) {
 
   unique_ptr<HTTPCodec> codec = codecFactory_->getCodec(
       nextProtocol,
@@ -73,6 +64,10 @@ void HTTPSessionAcceptor::onNewConnection(
     VLOG(2) << "codecFactory_ failed to provide codec";
     onSessionCreationError(ProxygenError::kErrorUnsupportedScheme);
     return;
+  }
+  auto egressSettings = codec->getEgressSettings();
+  if (egressSettings && setEnableConnectProtocol_) {
+    egressSettings->setSetting(SettingsId::ENABLE_CONNECT_PROTOCOL, 1);
   }
 
   auto controller = getController();

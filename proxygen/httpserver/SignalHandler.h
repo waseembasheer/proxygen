@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/io/async/AsyncSignalHandler.h>
@@ -22,11 +21,12 @@ class HTTPServer;
  *
  * Note: Should only be created from the thread invoking `HTTPServer::start()`.
  */
-class SignalHandler: private folly::AsyncSignalHandler {
+class SignalHandler : private folly::AsyncSignalHandler {
  public:
   explicit SignalHandler(HTTPServer* server);
 
   void install(const std::vector<int>& signals);
+
  private:
   // AsyncSignalHandler
   void signalReceived(int signum) noexcept override;
@@ -34,4 +34,4 @@ class SignalHandler: private folly::AsyncSignalHandler {
   HTTPServer* const server_{nullptr};
 };
 
-}
+} // namespace proxygen

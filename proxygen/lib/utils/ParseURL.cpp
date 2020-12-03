@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/utils/ParseURL.h>
 
 #include <algorithm>
@@ -14,9 +13,6 @@
 #include <proxygen/lib/utils/UtilInl.h>
 
 #include <proxygen/external/http_parser/http_parser.h>
-
-using folly::fbstring;
-using std::string;
 
 namespace proxygen {
 
@@ -52,18 +48,22 @@ static bool validateScheme(folly::StringPiece url) {
   }
 
   auto scheme = url.subpiece(0, schemeEnd);
-  return std::all_of(scheme.begin(), scheme.end(), [](auto _) {
-      return std::isalpha(_);
-  });
+  return std::all_of(
+      scheme.begin(), scheme.end(), [](auto _) { return std::isalpha(_); });
 }
 
 void ParseURL::parse() noexcept {
+  if (url_.size() == 1 && url_[0] == '/') {
+    path_ = url_;
+    valid_ = true;
+    return;
+  }
   if (validateScheme(url_)) {
     struct http_parser_url u;
     memset(&u, 0, sizeof(struct http_parser_url)); // init before used
     valid_ = !(http_parser_parse_url(url_.data(), url_.size(), 0, &u));
 
-    if(valid_) {
+    if (valid_) {
       // Since we init the http_parser_url with all fields to 0, if the field
       // not present in url, it would be [0, 0], means that this field starts at
       // 0 and len = 0, we will get "" from this.  So no need to check field_set
@@ -72,27 +72,27 @@ void ParseURL::parse() noexcept {
       scheme_ = url_.subpiece(u.field_data[UF_SCHEMA].off,
                               u.field_data[UF_SCHEMA].len);
 
-      if(u.field_data[UF_HOST].off != 0 &&
-         url_[u.field_data[UF_HOST].off - 1] == '[') {
+      if (u.field_data[UF_HOST].off != 0 &&
+          url_[u.field_data[UF_HOST].off - 1] == '[') {
         // special case: host: [::1]
         host_ = url_.subpiece(u.field_data[UF_HOST].off - 1,
                               u.field_data[UF_HOST].len + 2);
       } else {
-        host_ = url_.subpiece(u.field_data[UF_HOST].off,
-                              u.field_data[UF_HOST].len);
+        host_ =
+            url_.subpiece(u.field_data[UF_HOST].off, u.field_data[UF_HOST].len);
       }
 
       port_ = u.port;
 
-      path_ = url_.subpiece(u.field_data[UF_PATH].off,
-                            u.field_data[UF_PATH].len);
-      query_ = url_.subpiece(u.field_data[UF_QUERY].off,
-                             u.field_data[UF_QUERY].len);
+      path_ =
+          url_.subpiece(u.field_data[UF_PATH].off, u.field_data[UF_PATH].len);
+      query_ =
+          url_.subpiece(u.field_data[UF_QUERY].off, u.field_data[UF_QUERY].len);
       fragment_ = url_.subpiece(u.field_data[UF_FRAGMENT].off,
                                 u.field_data[UF_FRAGMENT].len);
 
-      authority_ = (port_) ? folly::to<std::string>(host_, ":", port_)
-                           : host_.str();
+      authority_ =
+          (port_) ? folly::to<std::string>(host_, ":", port_) : host_.str();
     }
   } else {
     parseNonFully();
@@ -155,7 +155,7 @@ bool ParseURL::parseAuthority() noexcept {
   if (pos != std::string::npos) {
     try {
       port_ = folly::to<uint16_t>(
-        folly::StringPiece(authority_, pos+1, std::string::npos));
+          folly::StringPiece(authority_, pos + 1, std::string::npos));
     } catch (...) {
       return false;
     }
@@ -185,7 +185,8 @@ bool ParseURL::hostIsIPAddress() {
   char buf6[sizeof(in6_addr)];
   // we have to make a copy of hostNoBrackets_ since the string piece is not
   // null-terminated
-  return inet_pton(af, hostNoBrackets_.str().c_str(),
+  return inet_pton(af,
+                   hostNoBrackets_.str().c_str(),
                    af == AF_INET ? buf4 : buf6) == 1;
 }
 
@@ -199,4 +200,4 @@ void ParseURL::stripBrackets() noexcept {
   }
 }
 
-}
+} // namespace proxygen

@@ -1,16 +1,23 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 namespace proxygen {
 
+#define SET_PROXYGEN_ERROR_IF(errorPtr, error) \
+  do {                                         \
+    if (errorPtr) {                            \
+      *errorPtr = error;                       \
+    }                                          \
+  } while (false)
+
+// clang-format off
 // Max must be the last one.
 #define PROXYGEN_ERROR_GEN(x)                   \
     x(None),                                    \
@@ -65,16 +72,26 @@ namespace proxygen {
     x(EarlyDataFailed),                         \
     x(AuthRequired),                            \
     x(Unauthorized),                            \
+    x(EgressEOMSeenOnParentStream),             \
+    x(TransportIsDraining),                     \
+    x(ParentStreamNotExist),                    \
+    x(CreatingStream),                          \
+    x(PushNotSupported),                        \
+    x(MaxConcurrentOutgoingStreamLimitReached), \
+    x(BadSocket),                               \
+    x(DuplicatedStreamId),                      \
+    x(ClientTransactionGone),                   \
+    x(NetworkSwitch),                           \
+    x(Forbidden),                               \
     x(Max)
+// clang-format on
 
 // Increase this if you add more error types and Max exceeds 63
 #define PROXYGEN_ERROR_BITSIZE 6
 
 #define PROXYGEN_ERROR_ENUM(error) kError##error
 
-enum ProxygenError {
-  PROXYGEN_ERROR_GEN(PROXYGEN_ERROR_ENUM)
-};
+enum ProxygenError { PROXYGEN_ERROR_GEN(PROXYGEN_ERROR_ENUM) };
 
 #undef PROXYGEN_ERROR_ENUM
 
@@ -82,4 +99,4 @@ extern const char* getErrorString(ProxygenError error);
 
 extern const char* getErrorStringByIndex(int i);
 
-}
+} // namespace proxygen

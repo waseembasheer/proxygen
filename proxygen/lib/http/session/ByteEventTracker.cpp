@@ -1,19 +1,15 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/session/ByteEventTracker.h>
 
 #include <folly/io/async/DelayedDestruction.h>
 #include <string>
-
-using std::string;
-using std::vector;
 
 namespace proxygen {
 
@@ -30,8 +26,9 @@ void ByteEventTracker::absorb(ByteEventTracker&& other) {
 // from a callback without causing problems
 bool ByteEventTracker::processByteEvents(std::shared_ptr<ByteEventTracker> self,
                                          uint64_t bytesWritten) {
-  bool advanceSOM = false;
-  bool advanceEOM = false;
+  // update our local cache of the number of bytes written so far
+  DCHECK(bytesWritten >= bytesWritten_);
+  bytesWritten_ = bytesWritten;
 
   while (!byteEvents_.empty() &&
          (byteEvents_.front().byteOffset_ <= bytesWritten)) {
@@ -44,20 +41,10 @@ bool ByteEventTracker::processByteEvents(std::shared_ptr<ByteEventTracker> self,
         txn->onEgressHeaderFirstByte();
         break;
       case ByteEvent::FIRST_BYTE:
-        txn->onEgressBodyFirstByte(event.byteOffset_);
-        if (callback_) {
-          callback_->onFirstByteEvent(
-              txn, event.byteOffset_, event.bufferWriteTracked_);
-        }
-        advanceSOM = true;
+        txn->onEgressBodyFirstByte();
         break;
       case ByteEvent::LAST_BYTE:
-        txn->onEgressBodyLastByte(event.byteOffset_);
-        if (callback_) {
-          callback_->onLastByteEvent(
-              txn, event.byteOffset_, event.bufferWriteTracked_);
-        }
-        advanceEOM = true;
+        txn->onEgressBodyLastByte();
         break;
       case ByteEvent::TRACKED_BYTE:
         txn->onEgressTrackedByte();
@@ -68,6 +55,18 @@ bool ByteEventTracker::processByteEvents(std::shared_ptr<ByteEventTracker> self,
           callback_->onPingReplyLatency(latency);
         }
         break;
+      case ByteEvent::SECOND_TO_LAST_PACKET:
+        // we don't track the write flush, so do nothing...
+        break;
+    }
+
+    // notify that the offset the ByteEvent is associated with has been written
+    // to the socket
+    onByteEventWrittenToSocket(event);
+
+    // deliver to the callback
+    if (callback_) {
+      callback_->onTxnByteEventWrittenToBuf(event);
     }
 
     VLOG(5) << " removing ByteEvent " << event;
@@ -76,12 +75,6 @@ bool ByteEventTracker::processByteEvents(std::shared_ptr<ByteEventTracker> self,
     byteEvents_.pop_front_and_dispose([](ByteEvent* event) { delete event; });
   }
 
-  if (advanceSOM) {
-    somEventProcessed();
-  }
-  if (advanceEOM) {
-    eomEventProcessed();
-  }
   return self.use_count() == 1;
 }
 

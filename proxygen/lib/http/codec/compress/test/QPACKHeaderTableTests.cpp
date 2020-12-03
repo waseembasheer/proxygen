@@ -1,26 +1,21 @@
 /*
- *  Copyright (c) 2018-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <folly/portability/GTest.h>
 #include <memory>
-#include <proxygen/lib/http/codec/compress/QPACKHeaderTable.h>
 #include <proxygen/lib/http/codec/compress/Logging.h>
+#include <proxygen/lib/http/codec/compress/QPACKHeaderTable.h>
 #include <sstream>
-
-using namespace std;
-using namespace testing;
 
 namespace proxygen {
 
 class QPACKHeaderTableTests : public testing::Test {
  public:
-
  protected:
   QPACKHeaderTable table_{320, true};
 };
@@ -59,16 +54,16 @@ TEST_F(QPACKHeaderTableTests, Eviction) {
     table_.addRef(i);
   }
   table_.setAcknowledgedInsertCount(max);
-  EXPECT_FALSE(table_.canIndex(accept));
+  EXPECT_FALSE(table_.canIndex(accept.name, accept.value));
   EXPECT_FALSE(table_.add(accept.copy()));
   table_.subRef(1);
-  EXPECT_TRUE(table_.canIndex(accept));
+  EXPECT_TRUE(table_.canIndex(accept.name, accept.value));
   EXPECT_TRUE(table_.add(accept.copy()));
 
   table_.subRef(3);
-  EXPECT_FALSE(table_.canIndex(accept));
+  EXPECT_FALSE(table_.canIndex(accept.name, accept.value));
   table_.subRef(2);
-  EXPECT_TRUE(table_.canIndex(accept));
+  EXPECT_TRUE(table_.canIndex(accept.name, accept.value));
 }
 
 TEST_F(QPACKHeaderTableTests, BadEviction) {
@@ -175,12 +170,11 @@ TEST_F(QPACKHeaderTableTests, Duplication) {
   table_.addRef(oldestAbsolute);
 
   // Table should be full
-  EXPECT_FALSE(table_.canIndex(accept));
+  EXPECT_FALSE(table_.canIndex(accept.name, accept.value));
 
   res = table_.maybeDuplicate(table_.size(), true);
   EXPECT_FALSE(res.first);
   EXPECT_EQ(res.second, 0);
-
 }
 
 TEST_F(QPACKHeaderTableTests, CanEvictWithRoom) {
@@ -193,14 +187,14 @@ TEST_F(QPACKHeaderTableTests, CanEvictWithRoom) {
   // abs index = 1 is evictable, but index = 2 is referenced, so we can
   // insert up to (320 - 8 * 39) + 39 = 47
   table_.addRef(2);
-  EXPECT_TRUE(table_.canIndex(fortySevenBytes));
+  EXPECT_TRUE(table_.canIndex(fortySevenBytes.name, fortySevenBytes.value));
   EXPECT_TRUE(table_.add(fortySevenBytes.copy()));
 }
 
 TEST_F(QPACKHeaderTableTests, EvictNonDrained) {
-  HPACKHeader small("ab", "cd"); // 36 bytes
-  HPACKHeader small2("abcd", std::string(14, 'b')); // 50 bytes
-  HPACKHeader med(std::string(20, 'a'), std::string(20, 'b')); // 72
+  HPACKHeader small("ab", "cd");                                 // 36 bytes
+  HPACKHeader small2("abcd", std::string(14, 'b'));              // 50 bytes
+  HPACKHeader med(std::string(20, 'a'), std::string(20, 'b'));   // 72
   HPACKHeader large(std::string(34, 'a'), std::string(34, 'b')); // 100
 
   table_.setCapacity(220);
@@ -230,4 +224,4 @@ TEST_F(QPACKHeaderTableTests, BadSync) {
   EXPECT_FALSE(table_.onInsertCountIncrement(1));
 }
 
-}
+} // namespace proxygen

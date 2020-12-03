@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/http/session/SecondaryAuthManager.h>
 #include <fizz/crypto/test/TestUtil.h>
 #include <fizz/protocol/test/Mocks.h>
@@ -23,9 +22,6 @@ using namespace proxygen;
 using namespace fizz;
 using namespace fizz::test;
 using namespace folly;
-using namespace folly::test;
-using namespace folly::io;
-using namespace std;
 
 StringPiece expected_auth_request = {
     "120000303132333435363738396162636465660008000d000400020403"};
@@ -114,10 +110,10 @@ TEST(SecondaryAuthManagerTest, Authenticator) {
   auto isValid = authManager.validateAuthenticator(
       fizzBase, TransportDirection::UPSTREAM, certId, std::move(authenticator));
   auto cachedCertId = authManager.getCertId(requestId);
-  EXPECT_TRUE(cachedCertId.hasValue());
+  EXPECT_TRUE(cachedCertId.has_value());
   EXPECT_EQ(*cachedCertId, certId);
   auto peerCert = authManager.getPeerCert(certId);
-  EXPECT_TRUE(peerCert.hasValue());
+  EXPECT_TRUE(peerCert.has_value());
   EXPECT_EQ((*peerCert).size(), 1);
   EXPECT_EQ(expected_cert,
             StringPiece(hexlify(((*peerCert)[0].cert_data)->coalesce())));

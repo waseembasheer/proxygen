@@ -1,15 +1,15 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/SocketAddress.h>
+#include <folly/io/SocketOptionMap.h>
 #include <proxygen/lib/utils/Time.h>
 
 #include "proxygen/lib/healthcheck/ServerHealthCheckerCallback.h"
@@ -37,11 +37,23 @@ class PoolHealthChecker {
    */
   virtual void deleteAllCheckers() = 0;
 
+  /**
+   * Add a new server to the healthchecker.
+   *
+   * Bind the HC socket to <bindAddress>, if provided.
+   * Add <extraSockOpts> to socket options, if provided.
+   * Replace HC address with <overrideAddress>, if provided.
+   *   Still use <address> or <name> to identify the server.
+   */
   virtual void addServer(
       const std::string& name,
       const folly::SocketAddress& address,
       bool isSecure,
-      std::shared_ptr<ServerHealthCheckerCallback> callback) = 0;
+      std::shared_ptr<ServerHealthCheckerCallback> callback,
+      folly::Optional<folly::SocketAddress> /* bindAddress */ = folly::none,
+      folly::Optional<folly::SocketOptionMap> /*extraSockOpts */ = folly::none,
+      folly::Optional<folly::SocketAddress> /* overrideAddress */ =
+          folly::none) = 0;
 
   virtual void removeServer(const folly::SocketAddress& address) = 0;
 
@@ -52,7 +64,8 @@ class PoolHealthChecker {
    * avoid redundant local health checks.
    */
   virtual void setLastExternalUpdateTime(
-      const folly::SocketAddress& serverAddress, TimePoint t) = 0;
+      std::vector<folly::SocketAddress>&& addresses, TimePoint t) {
+  }
 
   virtual ~PoolHealthChecker() {
   }

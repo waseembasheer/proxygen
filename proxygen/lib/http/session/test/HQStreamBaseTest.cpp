@@ -1,19 +1,17 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include "proxygen/lib/http/session/HQStreamBase.h"
 #include "proxygen/lib/http/session/test/HQSessionMocks.h"
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 
 using namespace proxygen;
-using namespace proxygen::detail;
 using namespace testing;
 
 /**
@@ -157,4 +155,27 @@ TEST_F(HQStreamDeathTest, TestCompositeBidirEmptyEgress) {
   EXPECT_EXIT(csBidirMappingBothSet_->getStreamId(),
               KilledBySignal(SIGABRT),
               "Ambiguous call 'getStreamId' on a composite stream");
+}
+
+TEST_F(HQStreamBaseTest, TestGetStreamDirection) {
+  EXPECT_EQ(ssEgressMapping_->getStreamDirection(),
+            HTTPException::Direction::EGRESS);
+
+  EXPECT_EQ(ssIngressMapping_->getStreamDirection(),
+            HTTPException::Direction::INGRESS);
+
+  EXPECT_EQ(ssBidirMapping_->getStreamDirection(),
+            HTTPException::Direction::INGRESS_AND_EGRESS);
+
+  EXPECT_EQ(csBidirMappingEmpty_->getStreamDirection(),
+            HTTPException::Direction::INGRESS_AND_EGRESS);
+
+  EXPECT_EQ(csBidirMappingEgressSet_->getStreamDirection(),
+            HTTPException::Direction::INGRESS_AND_EGRESS);
+
+  EXPECT_EQ(csBidirMappingIngressSet_->getStreamDirection(),
+            HTTPException::Direction::INGRESS_AND_EGRESS);
+
+  EXPECT_EQ(csBidirMappingBothSet_->getStreamDirection(),
+            HTTPException::Direction::INGRESS_AND_EGRESS);
 }

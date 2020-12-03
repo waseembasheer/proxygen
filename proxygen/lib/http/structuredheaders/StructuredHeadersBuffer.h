@@ -1,28 +1,30 @@
 /*
- *  Copyright (c) 2018-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
-#include <string>
-#include <folly/Range.h>
 #include "StructuredHeadersConstants.h"
+#include <folly/Range.h>
+#include <string>
 
 namespace proxygen {
 
 using namespace StructuredHeaders;
 
 class StructuredHeadersBuffer {
-public:
+ public:
+  explicit StructuredHeadersBuffer(const std::string& s)
+      : content_(s), originalContent_(s) {
+  }
 
-  explicit StructuredHeadersBuffer(const std::string& s) :
-    content_(s),
-    originalContent_(s) {}
+  explicit StructuredHeadersBuffer(folly::StringPiece s)
+      : content_(s), originalContent_(s) {
+  }
 
   /*
    * helper functions used to extract various lower-level items from a sequence
@@ -44,19 +46,20 @@ public:
 
   DecodeError handleDecodeError(const DecodeError& err);
 
-private:
-
+ private:
   DecodeError parseBinaryContent(StructuredHeaderItem& result);
 
   DecodeError parseNumber(StructuredHeaderItem& result);
 
+  DecodeError parseBoolean(StructuredHeaderItem& result);
+
   DecodeError parseString(StructuredHeaderItem& result);
 
   DecodeError parseInteger(const std::string& input,
-    StructuredHeaderItem& result);
+                           StructuredHeaderItem& result);
 
   DecodeError parseFloat(const std::string& input,
-    StructuredHeaderItem& result);
+                         StructuredHeaderItem& result);
 
   char peek();
 
@@ -68,4 +71,4 @@ private:
   folly::StringPiece originalContent_;
 };
 
-}
+} // namespace proxygen

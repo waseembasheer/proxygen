@@ -1,20 +1,17 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include "proxygen/lib/utils/ZlibStreamCompressor.h"
 
-#include <folly/lang/Bits.h>
 #include <folly/io/Cursor.h>
+#include <folly/lang/Bits.h>
 
-using namespace folly;
 using folly::IOBuf;
-using std::unique_ptr;
 
 // IOBuf uses 24 bytes of data for bookeeping purposes, so requesting for 4073
 // bytes of data will be rounded up to an allocation of 1 page.
@@ -46,15 +43,14 @@ int deflateHelper(z_stream* stream, IOBuf* out, int flush) {
 
   return deflate(stream, flush);
 }
-}
+} // namespace
 
-void ZlibStreamCompressor::init(CompressionType type, int32_t level) {
+void ZlibStreamCompressor::init() {
+  if (init_) {
+    return;
+  }
+  init_ = true;
 
-  DCHECK(type_ == CompressionType::NONE)
-      << "Attempt to re-initialize compression stream";
-
-  type_ = type;
-  level_ = level;
   status_ = Z_OK;
 
   zlibStream_.zalloc = Z_NULL;
@@ -82,7 +78,7 @@ void ZlibStreamCompressor::init(CompressionType type, int32_t level) {
                              Z_DEFAULT_STRATEGY);
     } break;
     case CompressionType::DEFLATE:
-      status_ = deflateInit(&zlibStream_, level);
+      status_ = deflateInit(&zlibStream_, level_);
       break;
     default:
       DCHECK(false) << "Unsupported zlib compression type.";
@@ -95,12 +91,11 @@ void ZlibStreamCompressor::init(CompressionType type, int32_t level) {
 }
 
 ZlibStreamCompressor::ZlibStreamCompressor(CompressionType type, int level)
-    : status_(Z_OK) {
-  init(type, level);
+    : type_(type), level_(level) {
 }
 
 ZlibStreamCompressor::~ZlibStreamCompressor() {
-  if (type_ != CompressionType::NONE) {
+  if (init_) {
     status_ = deflateEnd(&zlibStream_);
   }
 }
@@ -110,6 +105,7 @@ ZlibStreamCompressor::~ZlibStreamCompressor() {
 // true on the final compression call.
 std::unique_ptr<IOBuf> ZlibStreamCompressor::compress(const IOBuf* in,
                                                       bool trailer) {
+  init();
   auto bufferLength = FLAGS_zlib_compressor_buffer_growth;
 
   auto out = addOutputBuffer(&zlibStream_, bufferLength);
@@ -161,4 +157,4 @@ std::unique_ptr<IOBuf> ZlibStreamCompressor::compress(const IOBuf* in,
 
   return out;
 }
-}
+} // namespace proxygen

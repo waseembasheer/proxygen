@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <proxygen/httpserver/HTTPServer.h>
@@ -17,14 +16,13 @@ namespace proxygen {
 
 class HTTPServerAcceptor final : public HTTPSessionAcceptor {
  public:
-  static AcceptorConfiguration makeConfig(
-    const HTTPServer::IPConfig& ipConfig,
-    const HTTPServerOptions& opts);
+  static AcceptorConfiguration makeConfig(const HTTPServer::IPConfig& ipConfig,
+                                          const HTTPServerOptions& opts);
 
   static std::unique_ptr<HTTPServerAcceptor> make(
-    const AcceptorConfiguration& conf,
-    const HTTPServerOptions& opts,
-    const std::shared_ptr<HTTPCodecFactory>& codecFactory = nullptr);
+      const AcceptorConfiguration& conf,
+      const HTTPServerOptions& opts,
+      const std::shared_ptr<HTTPCodecFactory>& codecFactory = nullptr);
 
   /**
    * Invokes the given method when all the connections are drained
@@ -43,7 +41,7 @@ class HTTPServerAcceptor final : public HTTPSessionAcceptor {
   HTTPTransaction::Handler* newHandler(HTTPTransaction& txn,
                                        HTTPMessage* msg) noexcept override;
 
-  void onNewConnection(folly::AsyncTransportWrapper::UniquePtr sock,
+  void onNewConnection(folly::AsyncTransport::UniquePtr sock,
                        const folly::SocketAddress* address,
                        const std::string& nextProtocolName,
                        wangle::SecureTransportType secureTransportType,
@@ -56,4 +54,4 @@ class HTTPServerAcceptor final : public HTTPSessionAcceptor {
   const std::vector<RequestHandlerFactory*> handlerFactories_{nullptr};
 };
 
-}
+} // namespace proxygen

@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <proxygen/lib/utils/AsyncTimeoutSet.h>
 
 #include <folly/ScopeGuard.h>
@@ -46,7 +45,7 @@ void AsyncTimeoutSet::Callback::setScheduled(AsyncTimeoutSet* timeoutSet,
   prev_ = prev;
   next_ = nullptr;
   expiration_ = timeoutSet->timeoutClock_.millisecondsSinceEpoch() +
-    timeoutSet_->getInterval();
+                timeoutSet_->getInterval();
 }
 
 void AsyncTimeoutSet::Callback::cancelTimeoutImpl() {
@@ -167,7 +166,7 @@ void AsyncTimeoutSet::headChanged() {
     this->folly::AsyncTimeout::cancelTimeout();
   } else {
     milliseconds delta =
-      head_->getTimeRemaining(timeoutClock_.millisecondsSinceEpoch());
+        head_->getTimeRemaining(timeoutClock_.millisecondsSinceEpoch());
     this->folly::AsyncTimeout::scheduleTimeout(delta.count());
   }
 }
@@ -187,7 +186,9 @@ void AsyncTimeoutSet::timeoutExpired() noexcept {
   // return.
   assert(!inTimeoutExpired_);
   inTimeoutExpired_ = true;
-  SCOPE_EXIT { inTimeoutExpired_ = false; };
+  SCOPE_EXIT {
+    inTimeoutExpired_ = false;
+  };
 
   // Get the current time.
   // For now we only compute the current time at the start of the loop.
@@ -222,4 +223,4 @@ void AsyncTimeoutSet::timeoutExpired() noexcept {
   }
 }
 
-}
+} // namespace proxygen

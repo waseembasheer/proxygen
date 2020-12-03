@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #include <folly/Conv.h>
 #include <folly/container/Foreach.h>
 #include <folly/portability/GTest.h>
@@ -19,7 +18,7 @@ using namespace proxygen;
 
 TEST(RendezvousHash, Consistency) {
   RendezvousHash hashes;
-  std::vector<std::pair<std::string, uint64_t> > nodes;
+  std::vector<std::pair<std::string, uint64_t>> nodes;
   for (int i = 0; i < 10; ++i) {
     nodes.emplace_back(folly::to<std::string>("key", i), 1);
   }
@@ -31,7 +30,7 @@ TEST(RendezvousHash, Consistency) {
       mapping[i] = hashes.get(i, rank);
     }
 
-    FOR_EACH_KV(key, expected, mapping) {
+    for (auto&& [key, expected] : mapping) {
       EXPECT_EQ(expected, hashes.get(key, rank));
     }
   }
@@ -40,7 +39,7 @@ TEST(RendezvousHash, Consistency) {
 TEST(RendezvousHash, ConsistencyWithNewNode) {
   RendezvousHash hashes;
   int numNodes = 10;
-  std::vector<std::pair<std::string, uint64_t> > nodes;
+  std::vector<std::pair<std::string, uint64_t>> nodes;
   for (int i = 0; i < numNodes; ++i) {
     nodes.emplace_back(folly::to<std::string>("key", i), 1);
   }
@@ -54,7 +53,7 @@ TEST(RendezvousHash, ConsistencyWithNewNode) {
   nodes.emplace_back(folly::to<std::string>("key", numNodes), 1);
   hashes.build(nodes);
   // traffic should only flow to the new node
-  FOR_EACH_KV (key, expected, mapping) {
+  for (auto&& [key, expected] : mapping) {
     size_t id = hashes.get(key);
     EXPECT_TRUE(expected == id || numNodes == int(id));
   }
@@ -63,7 +62,7 @@ TEST(RendezvousHash, ConsistencyWithNewNode) {
 TEST(RendezvousHash, ConsistencyWithIncreasedWeight) {
   RendezvousHash hashes;
   int numNodes = 10;
-  std::vector<std::pair<std::string, uint64_t> > nodes;
+  std::vector<std::pair<std::string, uint64_t>> nodes;
   for (int i = 0; i < numNodes; ++i) {
     nodes.emplace_back(folly::to<std::string>("key", i), i);
   }
@@ -78,12 +77,12 @@ TEST(RendezvousHash, ConsistencyWithIncreasedWeight) {
   nodes.clear();
   hashes = RendezvousHash();
   for (int i = 0; i < numNodes; ++i) {
-    nodes.emplace_back(folly::to<std::string>("key", i), i*2);
+    nodes.emplace_back(folly::to<std::string>("key", i), i * 2);
   }
   hashes.build(nodes);
 
   // traffic shouldn't flow at all
-  FOR_EACH_KV (key, expected, mapping) {
+  for (auto&& [key, expected] : mapping) {
     EXPECT_EQ(expected, hashes.get(key));
   }
 }
@@ -91,7 +90,7 @@ TEST(RendezvousHash, ConsistencyWithIncreasedWeight) {
 TEST(RendezvousHash, ConsistentFlowToIncreasedWeightNode) {
   RendezvousHash hashes;
   int numNodes = 10;
-  std::vector<std::pair<std::string, uint64_t> > nodes;
+  std::vector<std::pair<std::string, uint64_t>> nodes;
   for (int i = 0; i < numNodes; ++i) {
     nodes.emplace_back(folly::to<std::string>("key", i), i);
   }
@@ -113,7 +112,7 @@ TEST(RendezvousHash, ConsistentFlowToIncreasedWeightNode) {
   }
   hashes.build(nodes);
   // traffic should only flow to the first node
-  FOR_EACH_KV (key, expected, mapping) {
+  for (auto&& [key, expected] : mapping) {
     size_t id = hashes.get(key);
     EXPECT_TRUE(expected == id || 0 == int(id));
   }
@@ -122,7 +121,7 @@ TEST(RendezvousHash, ConsistentFlowToIncreasedWeightNode) {
 TEST(RendezvousHash, ConsistentFlowToDecreasedWeightNodes) {
   RendezvousHash hashes;
   int numNodes = 18;
-  std::vector<std::pair<std::string, uint64_t> > nodes;
+  std::vector<std::pair<std::string, uint64_t>> nodes;
   for (int i = 0; i < numNodes; ++i) {
     nodes.emplace_back(folly::to<std::string>("key", i), 100);
   }
@@ -146,7 +145,7 @@ TEST(RendezvousHash, ConsistentFlowToDecreasedWeightNodes) {
   }
 
   hashes.build(nodes);
-  FOR_EACH_KV (key, expected, mapping) {
+  for (auto&& [key, expected] : mapping) {
     // traffic should only flow to nodes with decreased nodes
     size_t id = hashes.get(key);
     EXPECT_TRUE(expected == id || id >= 5);
@@ -156,7 +155,7 @@ TEST(RendezvousHash, ConsistentFlowToDecreasedWeightNodes) {
 TEST(RendezvousHash, ConsistentFlowToDecreasedWeightNode) {
   RendezvousHash hashes;
   int numNodes = 10;
-  std::vector<std::pair<std::string, uint64_t> > nodes;
+  std::vector<std::pair<std::string, uint64_t>> nodes;
   for (int i = 0; i < numNodes; ++i) {
     nodes.emplace_back(folly::to<std::string>("key", i), i);
   }
@@ -175,15 +174,15 @@ TEST(RendezvousHash, ConsistentFlowToDecreasedWeightNode) {
   }
 
   // zero the weight of the last node
-  nodes.emplace_back(folly::to<std::string>("key", numNodes-1), 0);
+  nodes.emplace_back(folly::to<std::string>("key", numNodes - 1), 0);
   hashes.build(nodes);
-  FOR_EACH_KV (key, expected, mapping) {
+  for (auto&& [key, expected] : mapping) {
     // traffic should only flow from the zero weight cluster to others
     size_t id = hashes.get(key);
-    if (expected == (uint64_t)numNodes-1) {
-       EXPECT_TRUE(expected != id);
+    if (expected == (uint64_t)numNodes - 1) {
+      EXPECT_TRUE(expected != id);
     } else {
-       EXPECT_TRUE(expected == id);
+      EXPECT_TRUE(expected == id);
     }
   }
 }
@@ -191,9 +190,9 @@ TEST(RendezvousHash, ConsistentFlowToDecreasedWeightNode) {
 TEST(RendezvousHash, ConsistencyWithDecreasedWeight) {
   RendezvousHash hashes;
   int numNodes = 10;
-  std::vector<std::pair<std::string, uint64_t> > nodes;
+  std::vector<std::pair<std::string, uint64_t>> nodes;
   for (int i = 0; i < numNodes; ++i) {
-    nodes.emplace_back(folly::to<std::string>("key", i), i*2);
+    nodes.emplace_back(folly::to<std::string>("key", i), i * 2);
   }
   hashes.build(nodes);
   std::map<uint64_t, size_t> mapping;
@@ -211,28 +210,27 @@ TEST(RendezvousHash, ConsistencyWithDecreasedWeight) {
   hashes.build(nodes);
 
   // traffic shouldn't flow at all
-  FOR_EACH_KV (key, expected, mapping) {
+  for (auto&& [key, expected] : mapping) {
     EXPECT_EQ(expected, hashes.get(key));
   }
 }
 
 TEST(ConsistentHashRing, DistributionAccuracy) {
-  std::vector<std::string> keys =
-    {"ash_proxy", "prn_proxy", "snc_proxy", "frc_proxy"};
+  std::vector<std::string> keys = {
+      "ash_proxy", "prn_proxy", "snc_proxy", "frc_proxy"};
 
   std::vector<std::vector<uint64_t>> weights = {
-    {248, 342, 2, 384},
-    {10, 10, 10, 10},
-    {25, 25, 10, 10},
-    {100, 10, 10, 1},
-    {100, 5, 5, 5},
-    {922337203685, 12395828300, 50192385101, 59293845010}
-  };
+      {248, 342, 2, 384},
+      {10, 10, 10, 10},
+      {25, 25, 10, 10},
+      {100, 10, 10, 1},
+      {100, 5, 5, 5},
+      {922337203685, 12395828300, 50192385101, 59293845010}};
 
-  for (auto& weight: weights) {
+  for (auto& weight : weights) {
     RendezvousHash hashes;
-    std::vector<std::pair<std::string, uint64_t> > nodes;
-    FOR_EACH_RANGE (i, 0, keys.size()) {
+    std::vector<std::pair<std::string, uint64_t>> nodes;
+    FOR_EACH_RANGE(i, 0, keys.size()) {
       nodes.emplace_back(keys[i], weight[i]);
     }
     hashes.build(nodes);
@@ -245,7 +243,7 @@ TEST(ConsistentHashRing, DistributionAccuracy) {
 
     uint64_t totalWeight = 0;
 
-    for (auto& w: weight) {
+    for (auto& w : weight) {
       totalWeight += w;
     }
 

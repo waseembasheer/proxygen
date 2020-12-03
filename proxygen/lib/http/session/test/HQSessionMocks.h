@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/portability/GMock.h>
@@ -199,6 +198,11 @@ class MockServerPushLifecycleCallback : public ServerPushLifecycleCallback {
   MOCK_METHOD1(onOrphanedHalfOpenPushedTxn,
                void(const HTTPTransaction* /* txn */));
 
+  MOCK_METHOD3(onPushIdLimitExceeded,
+               void(hq::PushId /* incoming push id */,
+                    folly::Optional<hq::PushId> /* max allowed push id */,
+                    folly::Optional<HTTPCodec::StreamID> /* stream */));
+
   using PushPromiseBeginF =
       std::function<void(HTTPCodec::StreamID, hq::PushId)>;
   using PushPromiseF =
@@ -221,6 +225,11 @@ class MockServerPushLifecycleCallback : public ServerPushLifecycleCallback {
   using PushedTxnTimeoutF = std::function<void(const HTTPTransaction*)>;
   using OrphanedHalfOpenPushedTxnF =
       std::function<void(const HTTPTransaction*)>;
+
+  using PushIdLimitExceededF =
+      std::function<void(hq::PushId,
+                         folly::Optional<hq::PushId>,
+                         folly::Optional<HTTPCodec::StreamID>)>;
 
   void expectPushPromiseBegin(PushPromiseBeginF impl = nullptr) {
     auto& exp = EXPECT_CALL(*this, onPushPromiseBegin(testing::_, testing::_));
@@ -301,6 +310,14 @@ class MockServerPushLifecycleCallback : public ServerPushLifecycleCallback {
       exp.WillOnce(testing::Invoke(impl));
     }
   }
+
+  void expectPushIdLimitExceeded(PushIdLimitExceededF impl = nullptr) {
+    auto& exp = EXPECT_CALL(
+        *this, onPushIdLimitExceeded(testing::_, testing::_, testing::_));
+    if (impl) {
+      exp.WillOnce(testing::Invoke(impl));
+    }
+  }
 };
 
 class MockConnectCallback : public HQSession::ConnectCallback {
@@ -308,21 +325,24 @@ class MockConnectCallback : public HQSession::ConnectCallback {
   MOCK_METHOD0(connectSuccess, void());
   MOCK_METHOD0(onReplaySafe, void());
   MOCK_METHOD1(connectError, void(std::pair<quic::QuicErrorCode, std::string>));
+  MOCK_METHOD0(onFirstPeerPacketProcessed, void());
 };
 
 class MockHQSession : public HQSession {
  public:
-  MockHQSession(const std::chrono::milliseconds transactionsTimeout =
-                    std::chrono::milliseconds(5000),
-                proxygen::TransportDirection direction =
-                    proxygen::TransportDirection::UPSTREAM)
-      : HQSession(transactionsTimeout,
-                  nullptr,
-                  direction,
+  MockHQSession(const folly::Optional<std::chrono::milliseconds>&
+                    transactionsTimeout = folly::none,
+                HTTPSessionController* controller = nullptr,
+                const folly::Optional<proxygen::TransportDirection>& direction =
+                    folly::none)
+      : HQSession(transactionsTimeout.value_or(getDefaultTransactionTimeout()),
+                  controller,
+                  direction.value_or(getMockDefaultDirection()),
                   wangle::TransportInfo(),
                   nullptr),
-        transactionTimeout_(transactionsTimeout),
-        direction_(direction),
+        transactionTimeout_(
+            transactionsTimeout.value_or(getDefaultTransactionTimeout())),
+        direction_(direction.value_or(getMockDefaultDirection())),
         quicProtocolInfo_(std::make_shared<QuicProtocolInfo>()),
         quicStreamProtocolInfo_(std::make_shared<QuicStreamProtocolInfo>()) {
     LOG(INFO) << "Creating mock transaction on stream " << lastStreamId_;
@@ -338,6 +358,14 @@ class MockHQSession : public HQSession {
                   txn_->HTTPTransaction::setHandler(handler);
                 })),
             ::testing::Return(txn_.get())));
+  }
+
+  static std::chrono::milliseconds getDefaultTransactionTimeout() {
+    return std::chrono::milliseconds(5000);
+  }
+
+  static proxygen::TransportDirection getMockDefaultDirection() {
+    return proxygen::TransportDirection::UPSTREAM;
   }
 
   bool isDetachable(bool) const override {
@@ -434,6 +462,26 @@ class MockHQSession : public HQSession {
 
     return txn_.get();
   }
+
+  HQStreamTransportBase* findPushStream(quic::StreamId) override {
+    return nullptr;
+  }
+
+  void findPushStreams(std::unordered_set<HQStreamTransportBase*>&) override {
+  }
+  bool erasePushStream(quic::StreamId) override {
+    return false;
+  }
+  uint32_t getNumOutgoingStreams() const override {
+    return static_cast<uint32_t>(streams_.size());
+  }
+  uint32_t getNumIncomingStreams() const override {
+    return static_cast<uint32_t>(streams_.size());
+  }
+
+  void onNewPushStream(quic::StreamId /* streamId */,
+                       hq::PushId /* pushId */,
+                       size_t /* to consume */) override{};
 
   const std::chrono::milliseconds transactionTimeout_;
   const proxygen::TransportDirection direction_;

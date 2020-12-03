@@ -1,15 +1,12 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
-#include <proxygen/lib/utils/HTTPTime.h>
 
-#include <glog/logging.h>
+#include <proxygen/lib/utils/HTTPTime.h>
 
 #include <folly/portability/Time.h>
 
@@ -33,8 +30,7 @@ folly::Optional<int64_t> parseHTTPDateTime(const std::string& s) {
     return folly::Optional<int64_t>(timegm(&tm));
   }
 
-  LOG(INFO) << "Invalid http time: " << s;
   return folly::none;
 }
 
-} // proxygen
+} // namespace proxygen

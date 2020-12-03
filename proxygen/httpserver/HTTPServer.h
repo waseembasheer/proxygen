@@ -1,21 +1,21 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
-#include <wangle/ssl/SSLContextConfig.h>
+#include <folly/io/SocketOptionMap.h>
 #include <folly/io/async/EventBase.h>
-#include <wangle/bootstrap/ServerBootstrap.h>
 #include <proxygen/httpserver/HTTPServerOptions.h>
 #include <proxygen/lib/http/codec/HTTPCodecFactory.h>
 #include <proxygen/lib/http/session/HTTPSession.h>
 #include <thread>
+#include <wangle/bootstrap/ServerBootstrap.h>
+#include <wangle/ssl/SSLContextConfig.h>
 
 namespace proxygen {
 
@@ -31,7 +31,7 @@ class HTTPServer final {
    * For each IP you can specify HTTP protocol to use.  You can use plain old
    * HTTP/1.1 protocol or SPDY/3.1 for now.
    */
-  enum class Protocol: uint8_t {
+  enum class Protocol : uint8_t {
     HTTP,
     SPDY,
     HTTP2,
@@ -41,9 +41,8 @@ class HTTPServer final {
     IPConfig(folly::SocketAddress a,
              Protocol p,
              std::shared_ptr<HTTPCodecFactory> c = nullptr)
-        : address(a),
-          protocol(p),
-          codecFactory(c) {}
+        : address(a), protocol(p), codecFactory(c) {
+    }
 
     folly::SocketAddress address;
     Protocol protocol;
@@ -76,7 +75,7 @@ class HTTPServer final {
      */
     bool strictSSL{true};
 
-    folly::Optional<folly::AsyncSocket::OptionMap> acceptorSocketOptions;
+    folly::Optional<folly::SocketOptionMap> acceptorSocketOptions;
   };
 
   /**
@@ -125,10 +124,11 @@ class HTTPServer final {
    * Stop HTTPServer.
    *
    * Can be called from any thread, but only after start() has called
-   * onSuccess.  Server will stop listening for new connections and will
-   * wait for running requests to finish.
+   * onSuccess.  Server will stop listening for new connections and drop all
+   * connections immediately. Before calling stop(), you may want to make sure
+   * to properly drain and close on-going requests/connections.
    *
-   * TODO: Separate method to do hard shutdown?
+   * TODO: Separate method to do graceful shutdown?
    */
   void stop();
 
@@ -164,6 +164,9 @@ class HTTPServer final {
    */
   void updateTicketSeeds(wangle::TLSTicketKeySeeds seeds);
 
+ protected:
+  folly::Expected<folly::Unit, std::exception_ptr> startTcpServer();
+
  private:
   std::shared_ptr<HTTPServerOptions> options_;
 
@@ -189,4 +192,4 @@ class HTTPServer final {
   HTTPSession::InfoCallback* sessionInfoCb_{nullptr};
 };
 
-}
+} // namespace proxygen

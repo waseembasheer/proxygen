@@ -1,19 +1,17 @@
 /*
- *  Copyright (c) 2004-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
-#include <string>
+
 #include "StructuredHeadersConstants.h"
+#include <string>
 
 #pragma once
 
-namespace proxygen {
-namespace StructuredHeaders {
+namespace proxygen { namespace StructuredHeaders {
 
 bool isLcAlpha(char c);
 
@@ -35,5 +33,4 @@ std::string decodeBase64(const std::string& encoded);
 
 std::string encodeBase64(const std::string& input);
 
-}
-}
+}} // namespace proxygen::StructuredHeaders

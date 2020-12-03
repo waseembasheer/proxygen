@@ -1,10 +1,16 @@
-// Copyright 2004-present Facebook. All Rights Reserved.
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
+ *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
 
 #pragma once
 
 #include <folly/Optional.h>
-#include <folly/io/IOBuf.h>
 #include <folly/io/Cursor.h>
+#include <folly/io/IOBuf.h>
 
 #include <map>
 
@@ -65,7 +71,7 @@ class PartiallyReliableCurlClient
   void onError(const proxygen::HTTPException& error) noexcept override;
 
   void onBodyPeek(uint64_t offset,
-                  const folly::IOBufQueue& /* chain */) noexcept override;
+                  const folly::IOBuf& /* chain */) noexcept override;
 
   void onBodySkipped(uint64_t offset) noexcept override;
 
@@ -124,7 +130,8 @@ class PartiallyReliableSender : public PartiallyReliablePeerBase {
   bool hasMoreData() const;
 
  private:
-   folly::IOBufQueue sndBuf_{folly::IOBufQueue::cacheChainLength()};
+  folly::IOBufQueue sndBuf_{folly::IOBufQueue::cacheChainLength()};
+  // clang-format off
    const std::string cat{
  "                                                                               \n"
  "                     .............                .***.             .***.      \n"
@@ -149,7 +156,8 @@ class PartiallyReliableSender : public PartiallyReliablePeerBase {
  "            ***.$.$.* .*  .*.*.*    .*.*.* $.$.$****.......  *. *. $ *. *. $   \n"
  "                   ***.$.$.$.$.....$.$.****               **..$..$.*..$..$.*   \n"
  "                                                                               \n"
- };
+      // clang-format on
+  };
 };
 
 }} // namespace quic::samples

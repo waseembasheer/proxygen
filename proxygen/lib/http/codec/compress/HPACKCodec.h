@@ -1,35 +1,35 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <memory>
 #include <proxygen/lib/http/codec/TransportDirection.h>
+#include <proxygen/lib/http/codec/compress/CompressionInfo.h>
 #include <proxygen/lib/http/codec/compress/HPACKDecoder.h>
 #include <proxygen/lib/http/codec/compress/HPACKEncoder.h>
-#include <proxygen/lib/http/codec/compress/HeaderIndexingStrategy.h>
 #include <proxygen/lib/http/codec/compress/HeaderCodec.h>
-#include <proxygen/lib/http/codec/compress/CompressionInfo.h>
+#include <proxygen/lib/http/codec/compress/HeaderIndexingStrategy.h>
 #include <string>
 #include <vector>
 
 namespace folly { namespace io {
 class Cursor;
-}}
+}} // namespace folly::io
 
 namespace proxygen {
 
 class HPACKHeader;
+class HTTPMessage;
 
 namespace compress {
-std::pair<std::vector<HPACKHeader>, uint32_t> prepareHeaders(
-    std::vector<Header>& headers);
+uint32_t prepareHeaders(const std::vector<Header>& headers,
+                        std::vector<HPACKHeader>& prepared);
 }
 
 /*
@@ -41,15 +41,22 @@ std::pair<std::vector<HPACKHeader>, uint32_t> prepareHeaders(
 class HPACKCodec : public HeaderCodec {
  public:
   explicit HPACKCodec(TransportDirection direction);
-  ~HPACKCodec() override {}
+  ~HPACKCodec() override {
+  }
 
   std::unique_ptr<folly::IOBuf> encode(
-    std::vector<compress::Header>& headers) noexcept;
+      std::vector<compress::Header>& headers) noexcept;
 
-  void decodeStreaming(
-      folly::io::Cursor& cursor,
-      uint32_t length,
-      HPACK::StreamingCallback* streamingCb) noexcept;
+  void encode(std::vector<compress::Header>& headers,
+              folly::IOBufQueue& writeBuf) noexcept;
+
+  void encodeHTTP(const HTTPMessage& msg,
+                  folly::IOBufQueue& writeBuf,
+                  bool includeDate) noexcept;
+
+  void decodeStreaming(folly::io::Cursor& cursor,
+                       uint32_t length,
+                       HPACK::StreamingCallback* streamingCb) noexcept;
 
   void setEncoderHeaderTableSize(uint32_t size) {
     encoder_.setHeaderTableSize(size);
@@ -70,9 +77,17 @@ class HPACKCodec : public HeaderCodec {
     return CompressionInfo(encoder_.getTableSize(),
                            encoder_.getBytesStored(),
                            encoder_.getHeadersStored(),
+                           encoder_.getInsertCount(),
+                           0,
+                           0,
+                           encoder_.getStaticRefs(),
                            decoder_.getTableSize(),
                            decoder_.getBytesStored(),
-                           decoder_.getHeadersStored());
+                           decoder_.getHeadersStored(),
+                           decoder_.getInsertCount(),
+                           0,
+                           0,
+                           decoder_.getStaticRefs());
   }
 
   void setHeaderIndexingStrategy(const HeaderIndexingStrategy* indexingStrat) {
@@ -88,9 +103,10 @@ class HPACKCodec : public HeaderCodec {
 
  private:
   void recordCompressedSize(const folly::IOBuf* buf);
+  void recordCompressedSize(size_t size);
 
   std::vector<HPACKHeader> decodedHeaders_;
 };
 
 std::ostream& operator<<(std::ostream& os, const HPACKCodec& codec);
-}
+} // namespace proxygen

@@ -1,29 +1,24 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
 
 #include <proxygen/httpserver/HTTPServer.h>
 
 #include <folly/executors/thread_factory/NamedThreadFactory.h>
-#include <folly/system/ThreadName.h>
 #include <folly/io/async/EventBaseManager.h>
+#include <folly/system/ThreadName.h>
 #include <proxygen/httpserver/HTTPServerAcceptor.h>
 #include <proxygen/httpserver/SignalHandler.h>
-#include <proxygen/httpserver/filters/RejectConnectFilter.h>
 #include <proxygen/httpserver/filters/CompressionFilter.h>
+#include <proxygen/httpserver/filters/RejectConnectFilter.h>
 #include <wangle/ssl/SSLContextManager.h>
 
-using folly::AsyncServerSocket;
-using folly::EventBase;
 using folly::EventBaseManager;
 using folly::IOThreadPoolExecutor;
-using folly::SocketAddress;
 using folly::ThreadPoolExecutor;
 
 namespace proxygen {
@@ -33,15 +28,16 @@ class AcceptorFactory : public wangle::AcceptorFactory {
   AcceptorFactory(std::shared_ptr<HTTPServerOptions> options,
                   std::shared_ptr<HTTPCodecFactory> codecFactory,
                   AcceptorConfiguration config,
-                  HTTPSession::InfoCallback* sessionInfoCb) :
-      options_(options),
-      codecFactory_(codecFactory),
-      config_(config),
-      sessionInfoCb_(sessionInfoCb) {}
+                  HTTPSession::InfoCallback* sessionInfoCb)
+      : options_(options),
+        codecFactory_(codecFactory),
+        config_(config),
+        sessionInfoCb_(sessionInfoCb) {
+  }
   std::shared_ptr<wangle::Acceptor> newAcceptor(
       folly::EventBase* eventBase) override {
     auto acc = std::shared_ptr<HTTPServerAcceptor>(
-      HTTPServerAcceptor::make(config_, *options_, codecFactory_).release());
+        HTTPServerAcceptor::make(config_, *options_, codecFactory_).release());
     if (sessionInfoCb_) {
       acc->setSessionInfoCallback(sessionInfoCb_);
     }
@@ -56,8 +52,8 @@ class AcceptorFactory : public wangle::AcceptorFactory {
   HTTPSession::InfoCallback* sessionInfoCb_;
 };
 
-HTTPServer::HTTPServer(HTTPServerOptions options):
-    options_(std::make_shared<HTTPServerOptions>(std::move(options))) {
+HTTPServer::HTTPServer(HTTPServerOptions options)
+    : options_(std::make_shared<HTTPServerOptions>(std::move(options))) {
 
   // Insert a filter to fail all the CONNECT request, if required
   if (!options_->supportsConnect) {
@@ -66,13 +62,19 @@ HTTPServer::HTTPServer(HTTPServerOptions options):
         std::make_unique<RejectConnectFilterFactory>());
   }
 
-  // Add Content Compression filter (gzip), if needed. Should be
+  // Add Content Compression filter (gzip and maybe zstd), if needed. Should be
   // final filter
   if (options_->enableContentCompression) {
     CompressionFilterFactory::Options opts;
     opts.minimumCompressionSize = options_->contentCompressionMinimumSize;
     opts.zlibCompressionLevel = options_->contentCompressionLevel;
     opts.compressibleContentTypes = options_->contentCompressionTypes;
+    opts.enableGzip = options_->enableGzipCompression;
+    if (options_->enableZstdCompression) {
+      opts.enableZstd = options_->enableZstdCompression;
+      opts.independentChunks = options_->useZstdIndependentChunks;
+      opts.zstdCompressionLevel = options_->zstdContentCompressionLevel;
+    }
     options_->handlerFactories.insert(
         options_->handlerFactories.begin(),
         std::make_unique<CompressionFilterFactory>(opts));
@@ -93,20 +95,22 @@ void HTTPServer::bind(std::vector<IPConfig> const& addrs) {
 
 class HandlerCallbacks : public ThreadPoolExecutor::Observer {
  public:
-  explicit HandlerCallbacks(std::shared_ptr<HTTPServerOptions> options) : options_(options) {}
+  explicit HandlerCallbacks(std::shared_ptr<HTTPServerOptions> options)
+      : options_(options) {
+  }
 
   void threadStarted(ThreadPoolExecutor::ThreadHandle* h) override {
     auto evb = IOThreadPoolExecutor::getEventBase(h);
     CHECK(evb) << "Invariant violated - started thread must have an EventBase";
-    evb->runInEventBaseThread([=](){
-      for (auto& factory: options_->handlerFactories) {
+    evb->runInEventBaseThread([=]() {
+      for (auto& factory : options_->handlerFactories) {
         factory->onServerStart(evb);
       }
     });
   }
   void threadStopped(ThreadPoolExecutor::ThreadHandle* h) override {
-    IOThreadPoolExecutor::getEventBase(h)->runInEventBaseThread([&](){
-      for (auto& factory: options_->handlerFactories) {
+    IOThreadPoolExecutor::getEventBase(h)->runInEventBaseThread([&]() {
+      for (auto& factory : options_->handlerFactories) {
         factory->onServerStop();
       }
     });
@@ -116,29 +120,22 @@ class HandlerCallbacks : public ThreadPoolExecutor::Observer {
   std::shared_ptr<HTTPServerOptions> options_;
 };
 
-
-void HTTPServer::start(std::function<void()> onSuccess,
-                       std::function<void(std::exception_ptr)> onError) {
-  mainEventBase_ = EventBaseManager::get()->getEventBase();
-
+folly::Expected<folly::Unit, std::exception_ptr> HTTPServer::startTcpServer() {
   auto accExe = std::make_shared<IOThreadPoolExecutor>(1);
-  auto exe = std::make_shared<IOThreadPoolExecutor>(options_->threads,
-    std::make_shared<folly::NamedThreadFactory>("HTTPSrvExec"));
+  auto exe = std::make_shared<IOThreadPoolExecutor>(
+      options_->threads,
+      std::make_shared<folly::NamedThreadFactory>("HTTPSrvExec"));
   auto exeObserver = std::make_shared<HandlerCallbacks>(options_);
   // Observer has to be set before bind(), so onServerStart() callbacks run
   exe->addObserver(exeObserver);
 
   try {
-    FOR_EACH_RANGE (i, 0, addresses_.size()) {
+    FOR_EACH_RANGE(i, 0, addresses_.size()) {
       auto codecFactory = addresses_[i].codecFactory;
       auto accConfig = HTTPServerAcceptor::makeConfig(addresses_[i], *options_);
       auto factory = std::make_shared<AcceptorFactory>(
-          options_,
-          codecFactory,
-          accConfig,
-          sessionInfoCb_);
-      bootstrap_.push_back(
-          wangle::ServerBootstrap<wangle::DefaultPipeline>());
+          options_, codecFactory, accConfig, sessionInfoCb_);
+      bootstrap_.push_back(wangle::ServerBootstrap<wangle::DefaultPipeline>());
       bootstrap_[i].childHandler(factory);
       if (accConfig.enableTCPFastOpen) {
         // We need to do this because wangle's bootstrap has 2 acceptor configs
@@ -150,21 +147,35 @@ void HTTPServer::start(std::function<void()> onSuccess,
             accConfig.fastOpenQueueSize;
       }
       bootstrap_[i].group(accExe, exe);
+      if (accConfig.reusePort) {
+        bootstrap_[i].setReusePort(true);
+      }
       if (options_->preboundSockets_.size() > 0) {
         bootstrap_[i].bind(std::move(options_->preboundSockets_[i]));
       } else {
         bootstrap_[i].bind(addresses_[i].address);
       }
     }
-  } catch (const std::exception& ex) {
+  } catch (const std::exception&) {
     stop();
 
+    return folly::makeUnexpected(std::current_exception());
+  }
+
+  return folly::unit;
+}
+
+void HTTPServer::start(std::function<void()> onSuccess,
+                       std::function<void(std::exception_ptr)> onError) {
+  mainEventBase_ = EventBaseManager::get()->getEventBase();
+
+  auto tcpStarted = startTcpServer();
+  if (tcpStarted.hasError()) {
     if (onError) {
-      onError(std::current_exception());
+      onError(tcpStarted.error());
       return;
     }
-
-    throw;
+    std::rethrow_exception(tcpStarted.error());
   }
 
   // Install signal handler if required
@@ -179,7 +190,7 @@ void HTTPServer::start(std::function<void()> onSuccess,
       // IMPORTANT: Since we may be racing with stop(), we must assume that
       // mainEventBase_ can become null the moment that onSuccess is called,
       // so this **has** to be queued to run from inside loopForever().
-        onSuccess();
+      onSuccess();
     });
   }
   mainEventBase_->loopForever();
@@ -203,13 +214,15 @@ void HTTPServer::stop() {
   }
 
   if (mainEventBase_) {
-    mainEventBase_->terminateLoopSoon();
-    mainEventBase_ = nullptr;
+    // This HTTPServer object may be destoyed by the main thread once
+    // terminateLoopSoon() is called, so terminateLoopSoon() should be the last
+    // operation here.
+    std::exchange(mainEventBase_, nullptr)->terminateLoopSoon();
   }
 }
 
-const std::vector<const folly::AsyncSocketBase*>
-  HTTPServer::getSockets() const {
+const std::vector<const folly::AsyncSocketBase*> HTTPServer::getSockets()
+    const {
 
   std::vector<const folly::AsyncSocketBase*> sockets;
   FOR_EACH_RANGE(i, 0, bootstrap_.size()) {
@@ -242,7 +255,6 @@ int HTTPServer::getListenSocket() const {
   return socketFds[0].toFd();
 }
 
-
 void HTTPServer::updateTLSCredentials() {
   for (auto& bootstrap : bootstrap_) {
     bootstrap.forEachWorker([&](wangle::Acceptor* acceptor) {
@@ -253,9 +265,8 @@ void HTTPServer::updateTLSCredentials() {
       if (!evb) {
         return;
       }
-      evb->runInEventBaseThread([acceptor] {
-        acceptor->resetSSLContextConfigs();
-      });
+      evb->runInEventBaseThread(
+          [acceptor] { acceptor->resetSSLContextConfigs(); });
     });
   }
 }
@@ -278,4 +289,4 @@ void HTTPServer::updateTicketSeeds(wangle::TLSTicketKeySeeds seeds) {
   }
 }
 
-}
+} // namespace proxygen

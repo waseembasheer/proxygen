@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <cstdint>
@@ -23,7 +22,7 @@ namespace proxygen {
 // frames to convey the reasons for the stream or connection error.
 
 // We only need <1 byte to represent it in memory
-enum class ErrorCode: uint8_t {
+enum class ErrorCode : uint8_t {
   NO_ERROR = 0,
   PROTOCOL_ERROR = 1,
   INTERNAL_ERROR = 2,
@@ -52,4 +51,4 @@ extern const uint8_t kMaxErrorCode;
  */
 extern const char* getErrorCodeString(ErrorCode error);
 
-}
+} // namespace proxygen

@@ -1,21 +1,23 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <vector>
+
+#if !FOLLY_MOBILE
+#include <folly/small_vector.h>
+#endif
 
 #include <folly/Optional.h>
 #include <folly/Range.h>
 #include <proxygen/lib/http/HTTPMethod.h>
 #include <string>
-#include <vector>
 
 namespace proxygen {
 
@@ -71,7 +73,44 @@ bool bodyImplied(const HTTPHeaders& headers);
  */
 using TokenQPair = std::pair<folly::StringPiece, double>;
 
-bool parseQvalues(folly::StringPiece value, std::vector<TokenQPair> &output);
+constexpr size_t kTokenPairVecDefaultSize = 8;
+#if !FOLLY_MOBILE
+using TokenPairVec =
+    folly::small_vector<TokenQPair, kTokenPairVecDefaultSize, uint16_t>;
+#else
+using TokenPairVec = std::vector<TokenQPair>;
+#endif
+
+bool parseQvalues(folly::StringPiece value, TokenPairVec& output);
+
+using EncodingParams =
+    std::vector<std::pair<folly::StringPiece, folly::StringPiece>>;
+using EncodingList = std::vector<std::pair<folly::StringPiece, EncodingParams>>;
+
+/*
+ * Parse a request into components.
+ *
+ * E.g., "gzip;q=0.5, zstd;q=0.5;wl=16, *" into:
+ * [
+ *   ("gzip", [ ("q", "0.5") ]),
+ *   ("zstd", [ ("q", "0.5"), ("wl", "16") ]),
+ *   ("*", [])
+ * ]
+ */
+EncodingList parseEncoding(const folly::StringPiece header);
+
+/*
+ * For given Accept-Encoding header, returns if encoding is accepted (is in
+ * list and q > 0).
+ */
+bool acceptsEncoding(const folly::StringPiece header,
+                     const folly::StringPiece encoding);
+
+/**
+ * Equivalent if you've already parsed the header separately.
+ */
+bool acceptsEncoding(const EncodingList& encodings,
+                     const folly::StringPiece encoding);
 
 /**
  * Parse an RFC 2616 section 14.16 "bytes A-B/C" string and returns them as the
@@ -84,10 +123,10 @@ bool parseQvalues(folly::StringPiece value, std::vector<TokenQPair> &output);
  * Note that is ONLY suitable for use in parsing "Content-Range" response
  * headers. The "Range" request header has different but similar syntax.
  */
-bool parseByteRangeSpec(
-    folly::StringPiece value,
-    unsigned long& firstByte,
-    unsigned long& lastByte,
-    unsigned long& instanceLength);
+bool parseByteRangeSpec(folly::StringPiece value,
+                        unsigned long& firstByte,
+                        unsigned long& lastByte,
+                        unsigned long& instanceLength);
 
-}}
+} // namespace RFC2616
+} // namespace proxygen

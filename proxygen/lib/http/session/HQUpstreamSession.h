@@ -1,13 +1,10 @@
 /*
- *  Copyright (c) 2019-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
-// Copyright 2004-present Facebook. All Rights Reserved.
 
 #pragma once
 #include <proxygen/lib/http/session/HQSession.h>
@@ -60,6 +57,8 @@ class HQUpstreamSession : public HQSession {
 
   void onReplaySafe() noexcept override;
 
+  void onFirstPeerPacketProcessed() noexcept override;
+
   void handleReplaySafe() noexcept;
 
   HTTPTransaction::Handler* getTransactionTimeoutHandler(
@@ -87,10 +86,157 @@ class HQUpstreamSession : public HQSession {
 
   void detachThreadLocals(bool) override;
 
+  void onNetworkSwitch(
+      std::unique_ptr<folly::AsyncUDPSocket>) noexcept override;
+
+  uint32_t getNumOutgoingStreams() const override {
+    // need transport API
+    return static_cast<uint32_t>(streams_.size());
+  }
+
+  uint32_t getNumIncomingStreams() const override {
+    // need transport API
+    return static_cast<uint32_t>(numberOfIngressPushStreams());
+  }
+
  private:
   ~HQUpstreamSession() override;
 
   void connectTimeoutExpired() noexcept;
+
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4250) // inherits 'proxygen::detail::..' via dominance
+#endif
+
+  /**
+   * Client-side representation of a push stream.
+   * Does not support egress operations.
+   */
+  class HQIngressPushStream
+      : public detail::singlestream::SSIngress
+      , public HQSession::HQStreamTransportBase {
+   public:
+    HQIngressPushStream(HQSession& session,
+                        hq::PushId pushId,
+                        folly::Optional<HTTPCodec::StreamID> parentTxnId,
+                        uint32_t seqNo,
+                        const WheelTimerInstance& timeout,
+                        HTTPSessionStats* stats = nullptr,
+                        http2::PriorityUpdate priority = hqDefaultPriority)
+        : detail::singlestream::SSIngress(folly::none),
+          HQStreamTransportBase(session,
+                                TransportDirection::UPSTREAM,
+                                static_cast<HTTPCodec::StreamID>(pushId),
+                                seqNo,
+                                timeout,
+                                stats,
+                                priority,
+                                parentTxnId,
+                                hq::UnidirectionalStreamType::PUSH),
+          pushId_(pushId) {
+      // Ingress push streams are not initialized
+      // until after the nascent push stream
+      // has been received
+      // notify the testing callbacks that a half-opened push transaction
+      // has been created
+
+      // NOTE: change the API to avoid accepting parent txn ids
+      // as optional
+      CHECK(parentTxnId.has_value());
+      auto cb = ((HQUpstreamSession&)session_).serverPushLifecycleCb_;
+      if (cb) {
+        cb->onHalfOpenPushedTxn(&txn_, pushId, *parentTxnId, false);
+      }
+    }
+
+    // Bind this stream to a transport stream
+    void bindTo(quic::StreamId transportStreamId);
+
+    void onPushMessageBegin(HTTPCodec::StreamID pushId,
+                            HTTPCodec::StreamID parentTxnId,
+                            HTTPMessage* /* msg */) override {
+      LOG(ERROR) << "Push promise on push stream"
+                 << " txn=" << txn_ << " pushID=" << pushId
+                 << " parentTxnId=" << parentTxnId;
+      session_.dropConnectionAsync(
+          std::make_pair(HTTP3::ErrorCode::HTTP_WRONG_STREAM,
+                         "Push promise on push stream"),
+          kErrorConnection);
+    }
+
+    // Abort procedure that is specific to ingress push streams.
+    size_t sendAbort(HTTPTransaction* txn,
+                     ErrorCode errorCode) noexcept override {
+      // TBD: send "cancel push" here.
+
+      return sendAbortImpl(
+          hq::toHTTP3ErrorCode(errorCode),
+          folly::to<std::string>("Application aborts pushed txn,"
+                                 " errorCode=",
+                                 getErrorCodeString(errorCode),
+                                 " pushID=",
+                                 getPushId(),
+                                 " txn=",
+                                 txn->getID(),
+                                 " hasIngressStream=",
+                                 hasIngressStreamId()));
+    }
+
+    hq::PushId getPushId() const {
+      return pushId_;
+    }
+
+   private:
+    hq::PushId pushId_; // The push id in context of which this stream is
+                        // received
+  };                    // HQIngressPushStream
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
+  // Find an ingress push stream
+  HQIngressPushStream* findIngressPushStream(quic::StreamId);
+  HQIngressPushStream* findIngressPushStreamByPushId(hq::PushId);
+
+  uint32_t numberOfIngressPushStreams() const;
+
+  /**
+   * Attempt to bind an ingress push stream object (which has the txn)
+   * to a nascent stream (which has the transport/codec).
+   * returns true if binding was successful
+   */
+  bool tryBindIngressStreamToTxn(quic::StreamId streamID,
+                                 hq::PushId pushId,
+                                 HQIngressPushStream* pushStream = nullptr);
+
+  // Create ingress push stream.
+  HQStreamTransportBase* createIngressPushStream(quic::StreamId parentStreamId,
+                                                 hq::PushId pushId) override;
+
+  HQStreamTransportBase* findPushStream(quic::StreamId id) override;
+
+  void findPushStreams(
+      std::unordered_set<HQStreamTransportBase*>& streams) override {
+    for (auto& pstream : ingressPushStreams_) {
+      streams.insert(&pstream.second);
+    }
+  }
+
+  bool erasePushStream(quic::StreamId streamId) override;
+
+  void eraseUnboundStream(HQStreamTransportBase*) override;
+
+  void cleanupUnboundPushStreams(std::vector<quic::StreamId>&) override;
+
+  void onNewPushStream(quic::StreamId /* pushStreamId */,
+                       hq::PushId /* pushId */,
+                       size_t /* toConsume */) override;
+
+  // Incoming server push streams. Since the incoming push streams
+  // can be created before transport stream
+  std::unordered_map<hq::PushId, HQIngressPushStream> ingressPushStreams_;
 
   /**
    * The Session notifies when an upstream 'connection' has been established
@@ -116,6 +262,10 @@ class HQUpstreamSession : public HQSession {
   std::chrono::milliseconds connectTimeoutMs_;
   ConnectTimeout connectTimeout_;
   ConnCallbackState connCbState_{ConnCallbackState::NONE};
+
+  // Lookup maps for matching ingress push streams to push ids
+  folly::F14FastMap<hq::PushId, quic::StreamId> pushIdToStreamId_;
+  folly::F14FastMap<quic::StreamId, hq::PushId> streamIdToPushId_;
 };
 
 } // namespace proxygen

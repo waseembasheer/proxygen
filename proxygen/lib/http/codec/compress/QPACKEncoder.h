@@ -1,36 +1,36 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <folly/io/IOBuf.h>
 #include <list>
 #include <proxygen/lib/http/codec/compress/HPACKConstants.h>
-#include <proxygen/lib/http/codec/compress/QPACKContext.h>
 #include <proxygen/lib/http/codec/compress/HPACKEncodeBuffer.h>
 #include <proxygen/lib/http/codec/compress/HPACKEncoderBase.h>
-#include <vector>
+#include <proxygen/lib/http/codec/compress/QPACKContext.h>
 #include <set>
 #include <unordered_map>
+#include <vector>
 
 namespace proxygen {
 
 class HPACKDecodeBuffer;
 
-class QPACKEncoder : public HPACKEncoderBase, public QPACKContext {
+class QPACKEncoder
+    : public HPACKEncoderBase
+    , public QPACKContext {
 
  public:
   static const uint32_t kMaxHeaderTableSize = (1u << 16);
   static const uint32_t kDefaultMaxOutstandingListSize = (1u << 8);
 
-  explicit QPACKEncoder(bool huffman,
-                        uint32_t tableSize=HPACK::kTableSize);
+  explicit QPACKEncoder(bool huffman, uint32_t tableSize = HPACK::kTableSize);
 
   /**
    * Encode the given headers.
@@ -38,8 +38,8 @@ class QPACKEncoder : public HPACKEncoderBase, public QPACKContext {
 
   using Buf = std::unique_ptr<folly::IOBuf>;
   struct EncodeResult {
-    EncodeResult(Buf c, Buf s)
-        : control(std::move(c)), stream(std::move(s)) {}
+    EncodeResult(Buf c, Buf s) : control(std::move(c)), stream(std::move(s)) {
+    }
     Buf control;
     Buf stream;
   };
@@ -47,31 +47,31 @@ class QPACKEncoder : public HPACKEncoderBase, public QPACKContext {
   // Returns a pair of buffers.  One for the control stream and one for the
   // request stream
   EncodeResult encode(
-    const std::vector<HPACKHeader>& headers,
-    uint32_t headroom,
-    uint64_t streamId,
-    uint32_t maxEncoderStreamBytes=std::numeric_limits<uint32_t>::max());
+      const std::vector<HPACKHeader>& headers,
+      uint32_t headroom,
+      uint64_t streamId,
+      uint32_t maxEncoderStreamBytes = std::numeric_limits<uint32_t>::max());
 
-  HPACK::DecodeError decodeDecoderStream(
-      std::unique_ptr<folly::IOBuf> buf);
+  HPACK::DecodeError decodeDecoderStream(std::unique_ptr<folly::IOBuf> buf);
 
   HPACK::DecodeError onInsertCountIncrement(uint32_t inserts);
 
   HPACK::DecodeError onHeaderAck(uint64_t streamId, bool all);
 
-  bool setHeaderTableSize(uint32_t tableSize, bool updateMax=true) {
+  bool setHeaderTableSize(uint32_t tableSize, bool updateMax = true) {
     if (updateMax) {
       // The peer's max is used whenn encoding RequiredInsertCouunt
       if (maxTableSize_ != 0 && maxTableSize_ != tableSize) {
         LOG(ERROR) << "Cannot change non-zero max header table size, "
-          "maxTableSize_=" << maxTableSize_ << " tableSize=" << tableSize;
+                      "maxTableSize_="
+                   << maxTableSize_ << " tableSize=" << tableSize;
         return false;
       }
       maxTableSize_ = tableSize;
     }
     if (tableSize > kMaxHeaderTableSize) {
-      VLOG(2) << "Limiting table size from " << tableSize << " to " <<
-        kMaxHeaderTableSize;
+      VLOG(2) << "Limiting table size from " << tableSize << " to "
+              << kMaxHeaderTableSize;
       tableSize = kMaxHeaderTableSize;
     }
     HPACKEncoderBase::setHeaderTableSize(table_, tableSize);
@@ -94,12 +94,25 @@ class QPACKEncoder : public HPACKEncoderBase, public QPACKContext {
 
   void setMaxNumOutstandingBlocks(uint32_t value);
 
+  uint32_t startEncode(folly::IOBufQueue& controlQueue,
+                       uint32_t headroom,
+                       uint32_t maxEncoderStreamBytes);
+
+  size_t encodeHeaderQ(HPACKHeaderName name,
+                       folly::StringPiece value,
+                       uint32_t baseIndex,
+                       uint32_t& requiredInsertCount);
+
+  std::unique_ptr<folly::IOBuf> completeEncode(uint64_t streamId,
+                                               uint32_t baseIndex,
+                                               uint32_t requiredInsertCount);
+
  private:
   bool allowVulnerable() const {
     return numVulnerable_ < maxVulnerable_;
   }
 
-  bool shouldIndex(const HPACKHeader& header) const;
+  bool shouldIndex(const HPACKHeaderName& name, folly::StringPiece value) const;
 
   bool dynamicReferenceAllowed() const;
 
@@ -107,39 +120,39 @@ class QPACKEncoder : public HPACKEncoderBase, public QPACKContext {
 
   std::pair<bool, uint32_t> maybeDuplicate(uint32_t relativeIndex);
 
-  QPACKEncoder::EncodeResult
-  encodeQ(const std::vector<HPACKHeader>& headers, uint64_t streamId);
-
   std::tuple<bool, uint32_t, uint32_t> getNameIndexQ(
-    const HPACKHeaderName& headerName);
+      const HPACKHeaderName& headerName);
 
-  void encodeStreamLiteralQ(
-    const HPACKHeader& header, bool isStaticName, uint32_t nameIndex,
-    uint32_t absoluteNameIndex, uint32_t baseIndex,
-    uint32_t* requiredInsertCount);
+  size_t encodeStreamLiteralQ(const HPACKHeaderName& name,
+                              folly::StringPiece value,
+                              bool isStaticName,
+                              uint32_t nameIndex,
+                              uint32_t absoluteNameIndex,
+                              uint32_t baseIndex,
+                              uint32_t& requiredInsertCount);
 
-  void encodeHeaderQ(const HPACKHeader& header, uint32_t baseIndex,
-                     uint32_t* requiredInsertCount);
-
-  void encodeInsertQ(const HPACKHeader& header,
+  void encodeInsertQ(const HPACKHeaderName& name,
+                     folly::StringPiece value,
                      bool isStaticName,
                      uint32_t nameIndex);
 
-  void encodeLiteralQ(const HPACKHeader& header,
-                      bool isStaticName,
-                      bool postBase,
-                      uint32_t nameIndex,
-                      const HPACK::Instruction& idxInstr);
+  size_t encodeLiteralQ(const HPACKHeaderName& name,
+                        folly::StringPiece value,
+                        bool isStaticName,
+                        bool postBase,
+                        uint32_t nameIndex,
+                        const HPACK::Instruction& idxInstr);
 
   uint32_t encodeLiteralQHelper(HPACKEncodeBuffer& buffer,
-                                const HPACKHeader& header,
+                                const HPACKHeaderName& name,
+                                folly::StringPiece value,
                                 bool isStaticName,
                                 uint32_t nameIndex,
                                 uint8_t staticFlag,
                                 const HPACK::Instruction& idxInstr,
                                 const HPACK::Instruction& litInstr);
 
-  void trackReference(uint32_t index, uint32_t* requiredInsertCount);
+  void trackReference(uint32_t index, uint32_t& requiredInsertCount);
 
   void encodeDuplicate(uint32_t index);
 
@@ -163,7 +176,7 @@ class QPACKEncoder : public HPACKEncoderBase, public QPACKContext {
   };
   // Map streamID -> list of table index references for each outstanding block;
   std::unordered_map<uint64_t, std::list<OutstandingBlock>> outstanding_;
-  OutstandingBlock* curOutstanding_{nullptr};
+  OutstandingBlock curOutstanding_;
   uint32_t maxDepends_{0};
   uint32_t maxVulnerable_{HPACK::kDefaultBlocking};
   uint32_t numVulnerable_{0};
@@ -174,4 +187,4 @@ class QPACKEncoder : public HPACKEncoderBase, public QPACKContext {
   uint32_t maxNumOutstandingBlocks_{kDefaultMaxOutstandingListSize};
 };
 
-}
+} // namespace proxygen

@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2015-present, Facebook, Inc.
- *  All rights reserved.
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ * All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
  */
+
 #pragma once
 
 #include <list>
@@ -32,9 +31,18 @@ class HeaderTable {
     init(capacityVal);
   }
 
-  virtual ~HeaderTable() {}
+  virtual ~HeaderTable() {
+  }
   HeaderTable(const HeaderTable&) = delete;
   HeaderTable& operator=(const HeaderTable&) = delete;
+
+  /**
+   * Return Insert Count - the total number of headers inserted to this table,
+   * including evictions
+   */
+  uint32_t getInsertCount() const {
+    return insertCount_;
+  }
 
   /**
    * Add the header entry at the beginning of the table (index=1)
@@ -49,6 +57,14 @@ class HeaderTable {
    * @return 0 in case the header is not found
    */
   uint32_t getIndex(const HPACKHeader& header) const;
+
+  /**
+   * Get the index of the given header, if found.
+   *
+   * @return 0 in case the header is not found
+   */
+  uint32_t getIndex(const HPACKHeaderName& name,
+                    folly::StringPiece value) const;
 
   /**
    * Get the table entry at the given external index.
@@ -89,9 +105,9 @@ class HeaderTable {
   }
 
   /**
-  * Returns the maximum table length required to support HPACK headers given
-  * the specified capacity bytes
-  */
+   * Returns the maximum table length required to support HPACK headers given
+   * the specified capacity bytes
+   */
   uint32_t getMaxTableLength(uint32_t capacityVal) const;
 
   /**
@@ -126,10 +142,12 @@ class HeaderTable {
   /**
    * Static versions of the methods that translate indices.
    */
-  static uint32_t toExternal(uint32_t head, uint32_t length,
+  static uint32_t toExternal(uint32_t head,
+                             uint32_t length,
                              uint32_t internalIndex);
 
-  static uint32_t toInternal(uint32_t head, uint32_t length,
+  static uint32_t toInternal(uint32_t head,
+                             uint32_t length,
                              uint32_t externalIndex);
 
  protected:
@@ -145,7 +163,8 @@ class HeaderTable {
 
   virtual void resizeTable(uint32_t newLength);
 
-  virtual void updateResizedTable(uint32_t oldTail, uint32_t oldLength,
+  virtual void updateResizedTable(uint32_t oldTail,
+                                  uint32_t oldLength,
                                   uint32_t newLength);
 
   /**
@@ -186,11 +205,12 @@ class HeaderTable {
   uint32_t toInternal(uint32_t externalIndex) const;
 
   uint32_t capacity_{0};
-  uint32_t bytes_{0};     // size in bytes of the current entries
+  uint32_t bytes_{0}; // size in bytes of the current entries
   std::vector<HPACKHeader> table_;
 
-  uint32_t size_{0};    // how many entries we have in the table
-  uint32_t head_{0};     // points to the first element of the ring
+  uint32_t size_{0}; // how many entries we have in the table
+  uint32_t head_{0}; // points to the first element of the ring
+  uint32_t insertCount_{0};
 
   names_map names_;
 
@@ -199,10 +219,10 @@ class HeaderTable {
    * Shared implementation for getIndex and nameIndex
    */
   uint32_t getIndexImpl(const HPACKHeaderName& header,
-                        const folly::fbstring& value,
+                        folly::StringPiece value,
                         bool nameOnly) const;
 };
 
 std::ostream& operator<<(std::ostream& os, const HeaderTable& table);
 
-}
+} // namespace proxygen
